@@ -309,7 +309,7 @@ class ExamResult(models.Model):
 
 
 class SchoolFees(models.Model):
-    """Student school fees"""
+    """Student school fees - linked to fee types"""
     STATUS_CHOICES = (
         ('pending', 'Pending'),
         ('partial', 'Partial'),
@@ -418,7 +418,7 @@ class Notice(models.Model):
         ('high', 'High'),
     )
     
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='notices')
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='+')
     title = models.CharField(max_length=255)
     content = models.TextField()
     priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='medium')
@@ -483,4 +483,140 @@ class SyllabusTopic(models.Model):
         ordering = ['order']
     
     def __str__(self):
-        return f"{self.syllabus.title} - {self.title}"
+        return f"{self.syllabus.subject.name} - {self.title}"
+
+
+# ==================== NEW FEE MANAGEMENT SYSTEM ====================
+
+class FeeType(models.Model):
+    """Define types of fees (School Fees, PTA, Transport, etc.)"""
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='+')
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+    is_mandatory = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['school', 'name']
+        ordering = ['name']
+        indexes = [
+            models.Index(fields=['school', 'is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.school.name} - {self.name}"
+
+
+class StudentFeeAssignment(models.Model):
+    """Bulk assignment of fees to entire classes"""
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='fee_assignments')
+    fee_type = models.ForeignKey(FeeType, on_delete=models.CASCADE, related_name='class_assignments')
+    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='fee_assignments')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    due_date = models.DateField()
+    description = models.TextField(blank=True)
+    created_by = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True, limit_choices_to={'role': 'admin'})
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['fee_type', 'class_obj']
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['class_obj', 'due_date']),
+        ]
+    
+    def __str__(self):
+        return f"{self.fee_type.name} - {self.class_obj.name}"
+
+
+class StudentIndividualFee(models.Model):
+    """Individual fee assignment to specific students"""
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='individual_fees')
+    fee_type = models.ForeignKey(FeeType, on_delete=models.CASCADE, related_name='individual_assignments')
+    student = models.ForeignKey('users.User', on_delete=models.CASCADE, limit_choices_to={'role': 'student'}, related_name='individual_fees')
+    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='individual_student_fees')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    due_date = models.DateField()
+    status = models.CharField(max_length=20, choices=[('pending', 'Pending'), ('partial', 'Partial'), ('paid', 'Paid'), ('overdue', 'Overdue')], default='pending')
+    description = models.TextField(blank=True)
+    created_by = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True, related_name='assigned_individual_fees', limit_choices_to={'role': 'admin'})
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['fee_type', 'student', 'class_obj']
+        ordering = ['-due_date']
+        indexes = [
+            models.Index(fields=['student', 'status']),
+            models.Index(fields=['due_date']),
+        ]
+    
+    def __str__(self):
+        return f"{self.student.get_full_name()} - {self.fee_type.name}"
+
+
+class FeePayment(models.Model):
+    """Track fee payments from students"""
+    PAYMENT_METHOD_CHOICES = (
+        ('cash', 'Cash'),
+        ('bank_transfer', 'Bank Transfer'),
+        ('credit_card', 'Credit Card'),
+        ('check', 'Check'),
+        ('mobile_money', 'Mobile Money'),
+        ('other', 'Other'),
+    )
+    
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='fee_payments')
+    individual_fee = models.ForeignKey(StudentIndividualFee, on_delete=models.CASCADE, related_name='payments')
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_date = models.DateField(auto_now_add=True)
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, default='cash')
+    transaction_id = models.CharField(max_length=100, blank=True)
+    receipt_number = models.CharField(max_length=100, unique=True)
+    notes = models.TextField(blank=True)
+    recorded_by = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True, limit_choices_to={'role': 'admin'})
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-payment_date']
+        indexes = [
+            models.Index(fields=['individual_fee', 'payment_date']),
+        ]
+    
+    def __str__(self):
+        return f"Payment: {self.individual_fee.student.get_full_name()} - {self.amount_paid}"
+
+
+class FeeWaiver(models.Model):
+    """Manage fee waivers for students"""
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    )
+    
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='fee_waivers')
+    student = models.ForeignKey('users.User', on_delete=models.CASCADE, limit_choices_to={'role': 'student'}, related_name='fee_waivers')
+    individual_fee = models.ForeignKey(StudentIndividualFee, on_delete=models.CASCADE, related_name='waivers')
+    reason = models.TextField()
+    waiver_percentage = models.IntegerField(default=100)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    approved_by = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_waivers', limit_choices_to={'role': 'admin'})
+    approval_date = models.DateField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['student', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"Waiver: {self.student.get_full_name()} - {self.waiver_percentage}%"

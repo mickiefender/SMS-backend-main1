@@ -1,38 +1,70 @@
-from rest_framework import viewsets, generics
+from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
-from core.permissions import IsSuperAdmin, IsSchoolAdmin
-from apps.billing.models import Invoice, Payment, Fee
-from apps.billing.serializers import InvoiceSerializer, PaymentSerializer, FeeSerializer, StudentFeeAssignSerializer
+from core.permissions import IsSchoolAdminOrHigher
+from apps.billing.models import Invoice, Payment, FeeType, StudentFee, ClassFee
+from apps.billing.serializers import InvoiceSerializer, PaymentSerializer, FeeTypeSerializer, StudentFeeSerializer, ClassFeeSerializer
 
 
-class FeeViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for managing predefined fees.
-    """
-    serializer_class = FeeSerializer
-    permission_classes = [IsAuthenticated, IsSchoolAdmin]
-
+class FeeTypeViewSet(viewsets.ModelViewSet):
+    serializer_class = FeeTypeSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'destroy']:
+            return [IsSchoolAdminOrHigher()]
+        return [IsAuthenticated()]
+    
     def get_queryset(self):
-        return Fee.objects.filter(school=self.request.user.school)
-
+        if self.request.user.role == 'super_admin':
+            return FeeType.objects.all()
+        return FeeType.objects.filter(school=self.request.user.school)
+    
     def perform_create(self, serializer):
         serializer.save(school=self.request.user.school)
 
 
-class AssignFeeView(generics.CreateAPIView):
-    """
-    View for assigning fees to students or classes.
-    """
-    serializer_class = StudentFeeAssignSerializer
-    permission_classes = [IsAuthenticated, IsSchoolAdmin]
+class StudentFeeViewSet(viewsets.ModelViewSet):
+    serializer_class = StudentFeeSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_permissions(self):
+        if self.action in ['create', 'destroy']:
+            return [IsSchoolAdminOrHigher()]
+        return [IsAuthenticated()]
+    
+    def get_queryset(self):
+        if self.request.user.role == 'super_admin':
+            qs = StudentFee.objects.all()
+        else:
+            # Filter by class's school instead of student's school
+            qs = StudentFee.objects.filter(class_obj__school=self.request.user.school)
+        
+        print(f"[v0] StudentFeeViewSet - User: {self.request.user.email}, School: {self.request.user.school}")
+        print(f"[v0] StudentFeeViewSet - Queryset count: {qs.count()}")
+        
+        return qs
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+class ClassFeeViewSet(viewsets.ModelViewSet):
+    serializer_class = ClassFeeSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_permissions(self):
+        if self.action in ['create', 'destroy']:
+            return [IsSchoolAdminOrHigher()]
+        return [IsAuthenticated()]
+    
+    def get_queryset(self):
+        if self.request.user.role == 'super_admin':
+            qs = ClassFee.objects.all()
+        else:
+            qs = ClassFee.objects.filter(class_obj__school=self.request.user.school)
+        
+        print(f"[v0] ClassFeeViewSet - User: {self.request.user.email}, Role: {self.request.user.role}, School: {self.request.user.school}")
+        print(f"[v0] ClassFeeViewSet - Queryset count: {qs.count()}")
+        print(f"[v0] ClassFeeViewSet - Data: {list(qs.values())}")
+        
+        return qs
 
 
 class InvoiceViewSet(viewsets.ModelViewSet):
@@ -41,13 +73,16 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'destroy']:
-            return [IsSuperAdmin()]
+            return [IsSchoolAdminOrHigher()]
         return [IsAuthenticated()]
     
     def get_queryset(self):
         if self.request.user.role == 'super_admin':
             return Invoice.objects.all()
         return Invoice.objects.filter(school=self.request.user.school)
+    
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
 
 
 class PaymentViewSet(viewsets.ModelViewSet):

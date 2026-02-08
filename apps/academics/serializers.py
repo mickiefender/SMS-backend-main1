@@ -43,6 +43,8 @@ class ClassSerializer(serializers.ModelSerializer):
     level_name = serializers.SerializerMethodField()
     student_count = serializers.SerializerMethodField()
     level = serializers.PrimaryKeyRelatedField(queryset=Level.objects.all(), required=False, allow_null=True)
+    teachers = serializers.SerializerMethodField()
+    form_tutor = serializers.SerializerMethodField()
     
     class Meta:
         model = Class
@@ -53,6 +55,36 @@ class ClassSerializer(serializers.ModelSerializer):
     
     def get_student_count(self, obj):
         return obj.enrollments.filter(is_active=True).values('student').distinct().count()
+    
+    def get_teachers(self, obj):
+        """Get all teachers assigned to this class with their details"""
+        class_teachers = ClassTeacher.objects.filter(class_obj=obj).select_related('teacher')
+        teachers_data = []
+        for ct in class_teachers:
+            teacher = ct.teacher
+            teachers_data.append({
+                'id': teacher.id,
+                'name': teacher.get_full_name() or teacher.username,
+                'email': teacher.email,
+                'phone': teacher.phone or 'N/A',
+                'is_form_tutor': ct.is_form_tutor,
+                'gender': getattr(teacher, 'gender', 'N/A'),
+            })
+        return teachers_data
+    
+    def get_form_tutor(self, obj):
+        """Get the form tutor (main class teacher)"""
+        form_tutor = ClassTeacher.objects.filter(class_obj=obj, is_form_tutor=True).select_related('teacher').first()
+        if form_tutor and form_tutor.teacher:
+            teacher = form_tutor.teacher
+            return {
+                'id': teacher.id,
+                'name': teacher.get_full_name() or teacher.username,
+                'email': teacher.email,
+                'phone': teacher.phone or 'N/A',
+                'gender': getattr(teacher, 'gender', 'N/A'),
+            }
+        return None
 
 
 class ClassSubjectSerializer(serializers.ModelSerializer):

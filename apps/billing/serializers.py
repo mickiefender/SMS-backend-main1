@@ -1,74 +1,51 @@
 from rest_framework import serializers
-from apps.billing.models import Invoice, Payment, Fee
-from apps.academics.models import SchoolFees, Class, StudentClass
-from apps.users.models import User
+from .models import FeeType, StudentFee, ClassFee, Invoice, Payment, Fee
 
 
-class FeeSerializer(serializers.ModelSerializer):
+class FeeTypeSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Fee
-        fields = '__all__'
+        model = FeeType
+        fields = ['id', 'name', 'description', 'amount', 'is_active', 'is_mandatory', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
-class StudentFeeAssignSerializer(serializers.Serializer):
-    fee = serializers.PrimaryKeyRelatedField(queryset=Fee.objects.all())
-    student = serializers.PrimaryKeyRelatedField(queryset=User.objects.filter(role='student'), required=False)
-    class_obj = serializers.PrimaryKeyRelatedField(queryset=Class.objects.all(), required=False)
+class StudentFeeSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    fee_type_name = serializers.CharField(source='fee_type.name', read_only=True)
+    class_name = serializers.CharField(source='class_obj.name', read_only=True)
 
-    def validate(self, data):
-        if not data.get('student') and not data.get('class_obj'):
-            raise serializers.ValidationError("Either student or class must be provided.")
-        if data.get('student') and data.get('class_obj'):
-            raise serializers.ValidationError("Provide either student or class, not both.")
-        return data
+    class Meta:
+        model = StudentFee
+        fields = ['id', 'student', 'student_name', 'class_name', 'fee_type', 'fee_type_name', 'amount', 'due_date', 'paid', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'student_name', 'class_name', 'fee_type_name', 'created_at', 'updated_at']
 
-    def create(self, validated_data):
-        fee = validated_data.get('fee')
-        student = validated_data.get('student')
-        class_obj = validated_data.get('class_obj')
 
-        if student:
-            # Assign fee to a single student
-            student_class = StudentClass.objects.filter(student=student, is_active=True).first()
-            if not student_class:
-                raise serializers.ValidationError("Student is not enrolled in any active class.")
-            
-            school_fee = SchoolFees.objects.create(
-                school=fee.school,
-                student=student,
-                class_obj=student_class.class_obj,
-                title=fee.name,
-                amount_due=fee.amount,
-                due_date='2024-12-31',  # You might want to make this dynamic
-                description=fee.description
-            )
-            return school_fee
+class ClassFeeSerializer(serializers.ModelSerializer):
+    class_name = serializers.CharField(source='class_obj.name', read_only=True)
+    fee_type_name = serializers.CharField(source='fee_type.name', read_only=True)
 
-        if class_obj:
-            # Assign fee to all students in a class
-            students_in_class = StudentClass.objects.filter(class_obj=class_obj, is_active=True)
-            school_fees = []
-            for student_class in students_in_class:
-                school_fee = SchoolFees.objects.create(
-                    school=fee.school,
-                    student=student_class.student,
-                    class_obj=class_obj,
-                    title=fee.name,
-                    amount_due=fee.amount,
-                    due_date='2024-12-31',  # You might want to make this dynamic
-                    description=fee.description
-                )
-                school_fees.append(school_fee)
-            return school_fees
+    class Meta:
+        model = ClassFee
+        fields = ['id', 'class_obj', 'class_name', 'fee_type', 'fee_type_name', 'amount', 'due_date', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'class_name', 'fee_type_name', 'created_at', 'updated_at']
 
 
 class InvoiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Invoice
         fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
         fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class FeeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Fee
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'updated_at']

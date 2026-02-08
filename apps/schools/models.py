@@ -98,7 +98,7 @@ class Announcement(models.Model):
         ('staff', 'Staff'),
     )
     
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='announcements')
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='+')
     title = models.CharField(max_length=255)
     content = models.TextField()
     audience = models.CharField(max_length=20, choices=AUDIENCE_CHOICES, default='all')
