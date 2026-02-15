@@ -4,9 +4,10 @@ from apps.academics.views import (
     FacultyViewSet, DepartmentViewSet, LevelViewSet, SubjectViewSet,
     ClassViewSet, ClassSubjectViewSet, EnrollmentViewSet, TimetableViewSet,
     AcademicCalendarEventViewSet, ExamViewSet, ExamResultViewSet, SchoolFeesViewSet,
-    SchoolEventViewSet, DocumentViewSet, DocumentFolderViewSet, NoticeViewSet, UserProfilePictureViewSet,
+    SchoolEventViewSet, NoticeViewSet, UserProfilePictureViewSet,
     ClassTeacherViewSet, StudentClassViewSet, ClassSubjectTeacherViewSet
 )
+from apps.academics.views_documents import DocumentViewSet, DocumentFolderViewSet
 
 router = DefaultRouter()
 router.register(r'faculties', FacultyViewSet, basename='faculty')

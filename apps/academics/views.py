@@ -371,11 +371,21 @@ class DocumentViewSet(viewsets.ModelViewSet):
             return Document.objects.all().order_by('-created_at')
     
     def perform_create(self, serializer):
-        school_id = getattr(self.request.user, 'school_id', None)
+        user = self.request.user
+        school_id = getattr(user, 'school_id', None)
+
+        if user.role == 'teacher' and not school_id:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Your account is not associated with a school. Please contact an administrator to be assigned to a school before uploading materials.")
+
         if school_id:
-            serializer.save(uploaded_by=self.request.user, school_id=school_id)
+            serializer.save(uploaded_by=user, school_id=school_id)
+        elif user.role != 'teacher': # Allow super_admin to create without school_id
+            serializer.save(uploaded_by=user)
         else:
-            serializer.save(uploaded_by=self.request.user)
+            # This case should be blocked by the check above, but as a safeguard:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You do not have permission to create a document without a school.")
     
     @action(detail=False, methods=['post'])
     def generate_questions_from_topic(self, request):

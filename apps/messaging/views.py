@@ -4,9 +4,13 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Q
+from django.contrib.auth import get_user_model
 from core.permissions import IsSchoolAdminOrHigher, IsTeacher, IsStudent
 from .models import Message, Announcement, AnnouncementRead, Notice
 from .serializers import MessageSerializer, AnnouncementSerializer, AnnouncementReadSerializer, NoticeSerializer
+from .tasks import send_notice_email, send_announcement_email
+
+User = get_user_model()
 
 
 class MessageViewSet(viewsets.ModelViewSet):
@@ -61,11 +65,23 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         )
 
     def perform_create(self, serializer):
+        """Create announcement and send emails when published"""
+        print(f"[v0] Creating announcement. User ID: {self.request.user.pk}, Exists: {User.objects.filter(pk=self.request.user.pk).exists()}")
+        
+        # Always save without created_by first to avoid FK constraint issues
+        # created_by is read_only in serializer anyway
+        announcement = serializer.save(school=self.request.user.school)
+        
+        # Try to set created_by if user exists in DB
         try:
-            serializer.save(school=self.request.user.school, created_by=self.request.user)
+            if User.objects.filter(pk=self.request.user.pk).exists():
+                announcement.created_by = self.request.user
+                announcement.save(update_fields=['created_by'])
+                print(f"[v0] Set created_by to user {self.request.user.pk}")
+            else:
+                print(f"[v0] User {self.request.user.pk} does not exist in database, created_by will be NULL")
         except Exception as e:
-            print(f"[v0] Error in AnnouncementViewSet.perform_create: {e}")
-            serializer.save(school=self.request.user.school, created_by=None)
+            print(f"[v0] Error setting created_by: {e}")
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
@@ -74,12 +90,16 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
-        """Publish an announcement"""
+        """Publish an announcement and send emails"""
         announcement = self.get_object()
         announcement.status = 'published'
         announcement.published_date = timezone.now()
         announcement.save()
-        return Response({'status': 'announcement published'})
+        
+        # Send emails asynchronously
+        send_announcement_email.delay(announcement.id)
+        
+        return Response({'status': 'announcement published and emails queued for sending'})
 
     @action(detail=True, methods=['post'])
     def mark_as_read(self, request, pk=None):
@@ -121,11 +141,26 @@ class NoticeViewSet(viewsets.ModelViewSet):
         )
 
     def perform_create(self, serializer):
+        """Create notice and send emails asynchronously"""
+        print(f"[v0] Creating notice. User ID: {self.request.user.pk}, Exists: {User.objects.filter(pk=self.request.user.pk).exists()}")
+        
+        # Always save without created_by first to avoid FK constraint issues
+        # created_by is read_only in serializer anyway
+        notice = serializer.save(school=self.request.user.school)
+        
+        # Try to set created_by if user exists in DB
         try:
-            serializer.save(school=self.request.user.school, created_by=self.request.user)
+            if User.objects.filter(pk=self.request.user.pk).exists():
+                notice.created_by = self.request.user
+                notice.save(update_fields=['created_by'])
+                print(f"[v0] Set created_by to user {self.request.user.pk}")
+            else:
+                print(f"[v0] User {self.request.user.pk} does not exist in database, created_by will be NULL")
         except Exception as e:
-            print(f"[v0] Error in NoticeViewSet.perform_create: {e}")
-            serializer.save(school=self.request.user.school, created_by=None)
+            print(f"[v0] Error setting created_by: {e}")
+        
+        # Send emails asynchronously
+        send_notice_email.delay(notice.id)
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:

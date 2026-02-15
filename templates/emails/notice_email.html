@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .header {
+            background-color: #1a2d4a;
+            color: white;
+            padding: 20px;
+            border-radius: 5px 5px 0 0;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .content {
+            background-color: white;
+            padding: 20px;
+        }
+        .priority {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        .priority.urgent {
+            background-color: #dc2626;
+            color: white;
+        }
+        .priority.high {
+            background-color: #f59e0b;
+            color: white;
+        }
+        .priority.medium {
+            background-color: #3b82f6;
+            color: white;
+        }
+        .priority.low {
+            background-color: #10b981;
+            color: white;
+        }
+        .footer {
+            background-color: #f0f0f0;
+            padding: 15px;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+            border-radius: 0 0 5px 5px;
+        }
+        .footer a {
+            color: #1a2d4a;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📬 Notice from {{ school_name }}</h1>
+        </div>
+        
+        <div class="content">
+            <p>Hello <strong>{{ recipient_name }}</strong>,</p>
+            
+            <p>You have received the following notice:</p>
+            
+            <div class="priority {{ notice_priority|lower }}">
+                {{ notice_priority|upper }}
+            </div>
+            
+            <h2>{{ notice_title }}</h2>
+            
+            <div style="background-color: #f5f5f5; padding: 15px; border-left: 4px solid #1a2d4a; margin: 20px 0;">
+                {{ notice_content|linebreaks }}
+            </div>
+            
+            <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+            
+            <p style="font-size: 12px; color: #666;">
+                <strong>Sent by:</strong> {{ created_by }}<br>
+                <strong>From:</strong> {{ school_name }}
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p>This is an automated notification from {{ school_name }}. Please do not reply to this email.</p>
+            <p>&copy; {{ school_name }}. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

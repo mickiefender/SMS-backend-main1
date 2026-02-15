@@ -59,75 +59,20 @@ class Payment(models.Model):
 
 # ==================== FEE MANAGEMENT SYSTEM ====================
 
-class FeeType(models.Model):
-    """Define types of fees (School Fees, PTA, Transport, etc.)"""
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='fee_types')
-    name = models.CharField(max_length=255)
-    description = models.TextField(blank=True)
-    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    is_active = models.BooleanField(default=True)
-    is_mandatory = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        unique_together = ['school', 'name']
-        ordering = ['name']
-        indexes = [
-            models.Index(fields=['school', 'is_active']),
-        ]
-    
-    def __str__(self):
-        return f"{self.school.name} - {self.name}"
-
-
-class StudentFee(models.Model):
-    """Individual fees assigned to students"""
-    student = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='student_fees', limit_choices_to={'role': 'student'})
-    fee_type = models.ForeignKey(FeeType, on_delete=models.CASCADE, related_name='student_fees')
-    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='student_individual_fees')
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
-    due_date = models.DateField()
-    paid = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = ['student', 'fee_type']
-        ordering = ['-due_date']
-
-    def __str__(self):
-        return f"{self.student.get_full_name()} - {self.fee_type.name}"
-
-
-class ClassFee(models.Model):
-    """Fees assigned to entire classes"""
-    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='class_fees')
-    fee_type = models.ForeignKey(FeeType, on_delete=models.CASCADE, related_name='class_fees')
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
-    due_date = models.DateField()
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = ['class_obj', 'fee_type']
-        ordering = ['-due_date']
-
-    def __str__(self):
-        return f"{self.class_obj} - {self.fee_type}"
-
-
 class Fee(models.Model):
     """Predefined fees"""
-    STATUS_CHOICES = (
-        ('active', 'Active'),
-        ('inactive', 'Inactive'),
+    FEE_TYPE_CHOICES = (
+        ('academic', 'Academic'),
+        ('administrative', 'Administrative'),
+        ('other', 'Other'),
     )
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='predefined_fees')
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='billing_fees')
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active')
+    fee_type = models.CharField(max_length=20, choices=FEE_TYPE_CHOICES)
+    is_active = models.BooleanField(default=True)
+    is_mandatory = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -137,3 +82,55 @@ class Fee(models.Model):
 
     def __str__(self):
         return f"{self.school.name} - {self.name}"
+
+
+class SchoolFeeAssignment(models.Model):
+    """Fees assigned to the entire school"""
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='school_fee_assignments')
+    fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name='school_assignments')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    due_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['school', 'fee']
+        ordering = ['-due_date']
+
+    def __str__(self):
+        return f"{self.school} - {self.fee}"
+
+
+class ClassFeeAssignment(models.Model):
+    """Fees assigned to entire classes"""
+    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='class_fee_assignments')
+    fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name='class_assignments')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    due_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['class_obj', 'fee']
+        ordering = ['-due_date']
+
+    def __str__(self):
+        return f"{self.class_obj} - {self.fee}"
+
+
+class StudentFeeAssignment(models.Model):
+    """Individual fees assigned to students"""
+    student = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='student_fee_assignments', limit_choices_to={'role': 'student'})
+    fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name='student_assignments')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    due_date = models.DateField()
+    paid = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['student', 'fee']
+        ordering = ['-due_date']
+
+    def __str__(self):
+        return f"{self.student.get_full_name()} - {self.fee.name}"
