@@ -2,12 +2,13 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.db import models
 from core.permissions import IsSchoolAdminOrHigher, IsSchoolAdminOrTeacher
 from apps.academics.models import (
     Faculty, Department, Level, Subject, Class,
     ClassSubject, Enrollment, Timetable, AcademicCalendarEvent,
     Exam, ExamResult, SchoolFees, SchoolEvent, Document, DocumentFolder, Notice, UserProfilePicture,
-    ClassTeacher, StudentClass, ClassSubjectTeacher
+    ClassTeacher, StudentClass, ClassSubjectTeacher, AcademicSession, TerminalReport, SubjectScore, GradingPolicy
 )
 from apps.academics.serializers import (
     FacultySerializer, DepartmentSerializer, LevelSerializer,
@@ -15,7 +16,8 @@ from apps.academics.serializers import (
     EnrollmentSerializer, TimetableSerializer, AcademicCalendarEventSerializer,
     ExamSerializer, ExamResultSerializer, SchoolFeesSerializer,
     SchoolEventSerializer, DocumentSerializer, DocumentFolderSerializer, NoticeSerializer, UserProfilePictureSerializer,
-    ClassTeacherSerializer, StudentClassSerializer, ClassSubjectTeacherSerializer
+    ClassTeacherSerializer, StudentClassSerializer, ClassSubjectTeacherSerializer,
+    AcademicSessionSerializer, TerminalReportSerializer, TerminalReportListSerializer, GradingPolicySerializer
 )
 
 
@@ -645,19 +647,152 @@ class NoticeViewSet(viewsets.ModelViewSet):
 class UserProfilePictureViewSet(viewsets.ModelViewSet):
     serializer_class = UserProfilePictureSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)
+
+        # Base queryset scoped to the school
         if school_id is None:
-            return UserProfilePicture.objects.all()
-        return UserProfilePicture.objects.filter(user__school_id=school_id)
-    
-    def perform_create(self, serializer):
-        # Users can only upload their own profile pictures, admins can upload for others
-        if self.request.user.role == 'school_admin':
-            serializer.save()
+            qs = UserProfilePicture.objects.all()
         else:
-            serializer.save(user=self.request.user)
+            qs = UserProfilePicture.objects.filter(user__school_id=school_id)
+
+        # Allow filtering by a specific user via ?user=<id>
+        user_id = self.request.query_params.get('user')
+        if user_id:
+            try:
+                qs = qs.filter(user_id=int(user_id))
+            except (ValueError, TypeError):
+                pass
+
+        return qs
+
+    def _resolve_target_user(self):
+        """
+        Return the User instance the picture belongs to.
+        School/super admins may pass a 'user' id in the request body to
+        upload on behalf of another user; everyone else gets their own account.
+        """
+        if self.request.user.role in ('school_admin', 'super_admin'):
+            user_id = self.request.data.get('user')
+            if user_id:
+                from apps.users.models import User as UserModel
+                try:
+                    return UserModel.objects.get(id=user_id)
+                except UserModel.DoesNotExist:
+                    pass
+        return self.request.user
+
+    def _upload_to_supabase(self, file_obj, user):
+        """
+        Upload profile picture to Supabase Storage.
+        Returns (storage_path, storage_url, file_size, content_type)
+        """
+        try:
+            from apps.storage.supabase_service import SupabaseStorageService
+            
+            # Determine folder based on user role
+            role_folder = user.role if user.role in ('student', 'teacher', 'school_admin') else 'other'
+            
+            # Create unique filename
+            import uuid
+            from datetime import datetime
+            file_ext = '.jpg'
+            if file_obj.name:
+                import os
+                file_ext = os.path.splitext(file_obj.name)[1] or '.jpg'
+            
+            filename = f"{role_folder}/{user.id}/avatar_{datetime.now().timestamp()}{file_ext}"
+            
+            # Initialize Supabase service
+            supabase_service = SupabaseStorageService()
+            
+            # Upload to Supabase
+            storage_path, storage_url = supabase_service.upload_profile_picture(
+                file_obj=file_obj,
+                user_id=user.id,
+                user_name=user.get_full_name() or user.username
+            )
+            
+            # Get file size and content type
+            file_obj.seek(0, 2)  # Seek to end
+            file_size = file_obj.tell()
+            file_obj.seek(0)  # Reset to beginning
+            
+            content_type = file_obj.content_type if hasattr(file_obj, 'content_type') else 'image/jpeg'
+            
+            return storage_path, storage_url, file_size, content_type
+            
+        except Exception as e:
+            print(f"[ProfilePicture] Supabase upload error: {str(e)}")
+            raise Exception(f"Failed to upload to Supabase: {str(e)}")
+
+    def create(self, request, *args, **kwargs):
+        """
+        Upsert behaviour: if the target user already has a profile picture
+        record, update it in-place instead of trying to INSERT a duplicate
+        (which would hit the OneToOneField unique constraint and return 400).
+        
+        Now also uploads to Supabase Storage.
+        """
+        target_user = self._resolve_target_user()
+        
+        # Check if picture file was uploaded
+        picture_file = request.FILES.get('picture')
+        
+        storage_path = None
+        storage_url = None
+        file_size = None
+        content_type = None
+        
+        # Upload to Supabase if file provided
+        if picture_file:
+            try:
+                storage_path, storage_url, file_size, content_type = self._upload_to_supabase(picture_file, target_user)
+            except Exception as e:
+                return Response(
+                    {'error': f'Failed to upload picture: {str(e)}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        try:
+            existing = UserProfilePicture.objects.get(user=target_user)
+            
+            # --- UPDATE path ---
+            update_data = {}
+            if picture_file:
+                update_data['storage_path'] = storage_path
+                update_data['storage_url'] = storage_url
+                update_data['file_size'] = file_size
+                update_data['content_type'] = content_type
+            
+            serializer = self.get_serializer(existing, data=update_data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        except UserProfilePicture.DoesNotExist:
+            # --- CREATE path ---
+            if not picture_file:
+                return Response(
+                    {'error': 'No picture file provided'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            create_data = {
+                'storage_path': storage_path,
+                'storage_url': storage_url,
+                'file_size': file_size,
+                'content_type': content_type,
+            }
+            serializer = self.get_serializer(data=create_data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save(user=target_user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def perform_create(self, serializer):
+        # Fallback used only when create() is not overridden (e.g. tests).
+        serializer.save(user=self._resolve_target_user())
 
 
 class ClassTeacherViewSet(viewsets.ModelViewSet):
@@ -747,12 +882,44 @@ class ClassSubjectTeacherViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)
         
+        print(f"[TeacherGrading] User: {self.request.user}, role: {self.request.user.role}, school_id: {school_id}")
+
         # Teachers can see their own subject assignments
         if self.request.user.role == 'teacher':
             if school_id:
-                return ClassSubjectTeacher.objects.filter(teacher=self.request.user, class_obj__school_id=school_id)
-            return ClassSubjectTeacher.objects.filter(teacher=self.request.user)
-        
+                # Get ClassSubjectTeacher assignments
+                subject_teacher_qs = ClassSubjectTeacher.objects.filter(
+                    teacher=self.request.user, 
+                    class_obj__school_id=school_id
+                )
+                # Also get classes where teacher is a ClassTeacher (form tutor)
+                class_teacher_qs = ClassTeacher.objects.filter(
+                    teacher=self.request.user,
+                    class_obj__school_id=school_id
+                )
+            else:
+                subject_teacher_qs = ClassSubjectTeacher.objects.filter(
+                    teacher=self.request.user
+                )
+                class_teacher_qs = ClassTeacher.objects.filter(
+                    teacher=self.request.user
+                )
+            
+            # Combine both querysets - get unique class_obj IDs
+            class_ids = set()
+            for st in subject_teacher_qs:
+                class_ids.add(st.class_obj_id)
+            for ct in class_teacher_qs:
+                class_ids.add(ct.class_obj_id)
+            
+            # Return ClassSubjectTeacher records for all these classes
+            queryset = ClassSubjectTeacher.objects.filter(
+                class_obj_id__in=class_ids
+            )
+            
+            print(f"[TeacherGrading] Teacher subject assignments: {subject_teacher_qs.count()}, class teacher assignments: {class_teacher_qs.count()}, combined class_ids: {class_ids}")
+            return queryset
+
         if school_id:
             return ClassSubjectTeacher.objects.filter(class_obj__school_id=school_id)
         return ClassSubjectTeacher.objects.all()
@@ -778,3 +945,382 @@ class ClassSubjectTeacherViewSet(viewsets.ModelViewSet):
         except Exception as e:
             print(f"[v0] ClassSubjectTeacherViewSet.perform_create - error: {str(e)}")
             raise
+
+
+# ==================== GRADING SYSTEM - TERMINAL REPORTS VIEWSETS ====================
+
+class GradingPolicyViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing grading policies (weightage for assessment types)"""
+    serializer_class = GradingPolicySerializer
+    
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+        return [IsAuthenticated()]
+    
+    def get_queryset(self):
+        school_id = get_school_filter(self.request.user)
+        if school_id is None:
+            return GradingPolicy.objects.all()
+        return GradingPolicy.objects.filter(school_id=school_id)
+    
+    def perform_create(self, serializer):
+        school_id = getattr(self.request.user, 'school_id', None)
+        if school_id:
+            serializer.save(school_id=school_id)
+        else:
+            serializer.save()
+    
+    @action(detail=False, methods=['get'])
+    def by_session(self, request):
+        """Get grading policies for a specific session"""
+        session_id = request.query_params.get('session_id')
+        if not session_id:
+            return Response({'error': 'session_id is required'}, status=400)
+        
+        school_id = get_school_filter(request.user)
+        policies = GradingPolicy.objects.filter(academic_session_id=session_id)
+        if school_id:
+            policies = policies.filter(school_id=school_id)
+        
+        return Response(GradingPolicySerializer(policies, many=True).data)
+    
+    @action(detail=False, methods=['post'])
+    def bulk_create(self, request):
+        """Bulk create grading policies for a session"""
+        try:
+            policies_data = request.data.get('policies', [])
+            session_id = request.data.get('session_id')
+            
+            if not session_id:
+                return Response({'error': 'session_id is required'}, status=400)
+            
+            if not policies_data:
+                return Response({'error': 'No policies provided'}, status=400)
+            
+            school_id = getattr(request.user, 'school_id', None)
+            if not school_id:
+                return Response({'error': 'School not found'}, status=400)
+            
+            created_policies = []
+            for policy_data in policies_data:
+                policy, created = GradingPolicy.objects.update_or_create(
+                    school_id=school_id,
+                    academic_session_id=session_id,
+                    assessment_type=policy_data.get('assessment_type'),
+                    defaults={
+                        'name': policy_data.get('name', 'Default Grading Policy'),
+                        'weightage': policy_data.get('weightage', 0),
+                        'is_active': policy_data.get('is_active', True),
+                    }
+                )
+                created_policies.append({
+                    'id': policy.id,
+                    'assessment_type': policy.assessment_type,
+                    'weightage': policy.weightage,
+                    'created': created,
+                })
+            
+            return Response({
+                'success': True,
+                'message': f'{len(created_policies)} policies saved',
+                'policies': created_policies,
+            })
+            
+        except Exception as e:
+            import traceback
+            print(f"[v0] Error bulk creating grading policies: {str(e)}")
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=500)
+
+
+class AcademicSessionViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing academic sessions/terms"""
+    serializer_class = AcademicSessionSerializer
+    
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+        return [IsAuthenticated()]
+    
+    def get_queryset(self):
+        school_id = get_school_filter(self.request.user)
+        if school_id is None:
+            return AcademicSession.objects.all()
+        return AcademicSession.objects.filter(school_id=school_id)
+    
+    def perform_create(self, serializer):
+        school_id = getattr(self.request.user, 'school_id', None)
+        if school_id:
+            serializer.save(school_id=school_id)
+        else:
+            serializer.save()
+    
+    @action(detail=False, methods=['get'])
+    def current(self, request):
+        """Get the current academic session"""
+        school_id = get_school_filter(request.user)
+        if school_id:
+            session = AcademicSession.objects.filter(school_id=school_id, is_current=True).first()
+        else:
+            session = AcademicSession.objects.filter(is_current=True).first()
+        
+        if session:
+            return Response(AcademicSessionSerializer(session).data)
+        return Response({'error': 'No current session found'}, status=404)
+
+
+class TerminalReportViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing terminal reports"""
+    serializer_class = TerminalReportSerializer
+    
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), IsSchoolAdminOrTeacher()]
+        return [IsAuthenticated()]
+    
+    def get_queryset(self):
+        school_id = get_school_filter(self.request.user)
+        
+        # Students can see their own terminal reports
+        if self.request.user.role == 'student':
+            if school_id:
+                return TerminalReport.objects.filter(student=self.request.user, school_id=school_id)
+            return TerminalReport.objects.filter(student=self.request.user)
+        
+        # Teachers can see reports for their classes
+        if self.request.user.role == 'teacher':
+            if school_id:
+                return TerminalReport.objects.filter(class_obj__teachers__teacher=self.request.user, school_id=school_id).distinct()
+            return TerminalReport.objects.filter(class_obj__teachers__teacher=self.request.user).distinct()
+        
+        # Admins see all
+        if school_id:
+            return TerminalReport.objects.filter(school_id=school_id)
+        return TerminalReport.objects.all()
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return TerminalReportListSerializer
+        return TerminalReportSerializer
+    
+    def perform_create(self, serializer):
+        school_id = getattr(self.request.user, 'school_id', None)
+        if school_id:
+            serializer.save(school_id=school_id, generated_by=self.request.user)
+        else:
+            serializer.save(generated_by=self.request.user)
+    
+    @action(detail=False, methods=['post'])
+    def generate_report(self, request):
+        """Generate a terminal report for a student using grading policy weightage"""
+        try:
+            student_id = request.data.get('student_id')
+            class_id = request.data.get('class_id')
+            session_id = request.data.get('session_id')
+            use_weighted = request.data.get('use_weighted', True)  # Use grading policy by default
+            
+            if not all([student_id, class_id, session_id]):
+                return Response({'error': 'student_id, class_id, and session_id are required'}, status=400)
+            
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            
+            student = User.objects.get(id=student_id)
+            class_obj = Class.objects.get(id=class_id)
+            session = AcademicSession.objects.get(id=session_id)
+            
+            # Get all subjects for the class
+            subjects = Subject.objects.filter(
+                classsubject__class_obj=class_obj
+            ).distinct()
+            
+            # Get grading policies for this session
+            grading_policies = GradingPolicy.objects.filter(
+                academic_session=session,
+                is_active=True
+            )
+            
+            # Get locked grades for this student in this class/session
+            from apps.students.models import Grade
+            grades = Grade.objects.filter(
+                student=student,
+                subject__in=subjects,
+                academic_session=session,
+                is_locked=True
+            )
+            
+            # Calculate total and average
+            total_marks = 0
+            subject_count = 0
+            subject_scores = []
+            
+            for subject in subjects:
+                subject_grades = grades.filter(subject=subject)
+                
+                if subject_grades.exists():
+                    if use_weighted and grading_policies.exists():
+                        # Calculate weighted percentage
+                        weighted_percentage = 0
+                        total_weight = 0
+                        
+                        for policy in grading_policies:
+                            weight = policy.weightage
+                            type_grades = subject_grades.filter(assessment_type=policy.assessment_type)
+                            
+                            if type_grades.exists():
+                                avg_percentage = type_grades.aggregate(avg=models.Avg('percentage'))['avg'] or 0
+                                weighted_percentage += avg_percentage * (weight / 100)
+                                total_weight += weight
+                        
+                        if total_weight > 0:
+                            # Normalize to 100
+                            display_percentage = (weighted_percentage / total_weight) * 100
+                        else:
+                            display_percentage = subject_grades.aggregate(avg=models.Avg('percentage'))['avg'] or 0
+                    else:
+                        # Simple average (old behavior)
+                        display_percentage = subject_grades.aggregate(avg=models.Avg('percentage'))['avg'] or 0
+                    
+                    total_marks += display_percentage
+                    subject_count += 1
+                    
+                    # Calculate grade
+                    if display_percentage >= 90:
+                        grade = 'A'
+                    elif display_percentage >= 80:
+                        grade = 'B'
+                    elif display_percentage >= 70:
+                        grade = 'C'
+                    elif display_percentage >= 60:
+                        grade = 'D'
+                    else:
+                        grade = 'F'
+                    
+                    subject_scores.append({
+                        'subject': subject,
+                        'percentage': display_percentage,
+                        'grade': grade,
+                        'use_weighted': use_weighted and grading_policies.exists(),
+                    })
+            
+            average_marks = total_marks / subject_count if subject_count > 0 else 0
+            
+            # Get attendance data
+            from apps.attendance.models import Attendance
+            total_days = Attendance.objects.filter(
+                student=student,
+                date__gte=session.start_date,
+                date__lte=session.end_date
+            ).count()
+            days_present = Attendance.objects.filter(
+                student=student,
+                date__gte=session.start_date,
+                date__lte=session.end_date,
+                status='present'
+            ).count()
+            attendance_percentage = (days_present / total_days * 100) if total_days > 0 else 0
+            
+            # Calculate overall grade
+            if average_marks >= 90:
+                overall_grade = 'A'
+            elif average_marks >= 80:
+                overall_grade = 'B'
+            elif average_marks >= 70:
+                overall_grade = 'C'
+            elif average_marks >= 60:
+                overall_grade = 'D'
+            else:
+                overall_grade = 'F'
+            
+            # Create or update terminal report
+            terminal_report, created = TerminalReport.objects.update_or_create(
+                student=student,
+                class_obj=class_obj,
+                academic_session=session,
+                defaults={
+                    'school_id': getattr(request.user, 'school_id', None),
+                    'total_marks': total_marks,
+                    'average_marks': average_marks,
+                    'total_days': total_days,
+                    'days_present': days_present,
+                    'attendance_percentage': attendance_percentage,
+                    'grade': overall_grade,
+                    'status': 'draft',
+                    'generated_by': request.user,
+                }
+            )
+            
+            # Create subject scores
+            for score_data in subject_scores:
+                SubjectScore.objects.update_or_create(
+                    terminal_report=terminal_report,
+                    subject=score_data['subject'],
+                    defaults={
+                        'percentage': score_data['percentage'],
+                        'total_score': score_data['percentage'],
+                        'grade': score_data['grade'],
+                        'use_grading_policy': score_data['use_weighted'],
+                    }
+                )
+            
+            return Response(TerminalReportSerializer(terminal_report).data, status=201 if created else 200)
+            
+        except Exception as e:
+            import traceback
+            print(f"[v0] Error generating terminal report: {str(e)}")
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=False, methods=['post'])
+    def calculate_positions(self, request):
+        """Calculate positions for all students in a class for a given session"""
+        try:
+            class_id = request.data.get('class_id')
+            session_id = request.data.get('session_id')
+            
+            if not all([class_id, session_id]):
+                return Response({'error': 'class_id and session_id are required'}, status=400)
+            
+            # Get all terminal reports for this class and session
+            reports = TerminalReport.objects.filter(
+                class_obj_id=class_id,
+                academic_session_id=session_id
+            ).order_by('-average_marks')
+            
+            total_students = reports.count()
+            position = 1
+            
+            for report in reports:
+                report.position = position
+                report.total_students = total_students
+                report.save()
+                position += 1
+            
+            return Response({
+                'success': True,
+                'message': f'Positions calculated for {total_students} students'
+            })
+            
+        except Exception as e:
+            import traceback
+            print(f"[v0] Error calculating positions: {str(e)}")
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=500)
+    
+    @action(detail=True, methods=['post'])
+    def publish(self, request, pk=None):
+        """Publish a terminal report"""
+        report = self.get_object()
+        report.status = 'published'
+        report.save()
+        return Response(TerminalReportSerializer(report).data)
+    
+    @action(detail=True, methods=['post'])
+    def add_remarks(self, request, pk=None):
+        """Add remarks to a terminal report"""
+        report = self.get_object()
+        report.form_teacher_remarks = request.data.get('form_teacher_remarks', '')
+        report.principal_remarks = request.data.get('principal_remarks', '')
+        report.save()
+        return Response(TerminalReportSerializer(report).data)

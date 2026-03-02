@@ -439,9 +439,20 @@ class Notice(models.Model):
 
 
 class UserProfilePicture(models.Model):
-    """Profile pictures for students and teachers"""
+    """Profile pictures for students and teachers - stored in Supabase"""
     user = models.OneToOneField('users.User', on_delete=models.CASCADE, related_name='profile_picture')
-    picture = models.ImageField(upload_to='profile_pictures/')
+    
+    # Legacy Django file field (kept for backward compatibility)
+    picture = models.ImageField(upload_to='profile_pictures/', null=True, blank=True)
+    
+    # Supabase Storage fields
+    storage_path = models.CharField(max_length=500, blank=True, null=True)
+    storage_url = models.TextField(blank=True, null=True)
+    file_size = models.BigIntegerField(null=True, blank=True)
+    content_type = models.CharField(max_length=100, null=True, blank=True)
+    width = models.IntegerField(null=True, blank=True)
+    height = models.IntegerField(null=True, blank=True)
+    
     uploaded_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -450,6 +461,15 @@ class UserProfilePicture(models.Model):
     
     def __str__(self):
         return f"{self.user.get_full_name()} - Profile Picture"
+    
+    @property
+    def display_url(self):
+        """Return the best available URL for display"""
+        if self.storage_url:
+            return self.storage_url
+        if self.picture:
+            return self.picture.url
+        return None
 
 
 class Syllabus(models.Model):
@@ -620,3 +640,211 @@ class FeeWaiver(models.Model):
     
     def __str__(self):
         return f"Waiver: {self.student.get_full_name()} - {self.waiver_percentage}%"
+
+
+# ==================== GRADING SYSTEM - POSITION & TERMINAL REPORTS ====================
+
+
+class AcademicSession(models.Model):
+    """Academic sessions/terms (e.g., "First Term 2024", "Second Term 2024")"""
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='academic_sessions')
+    name = models.CharField(max_length=100)  # e.g., "First Term 2024"
+    term = models.IntegerField(choices=[
+        (1, 'First Term'),
+        (2, 'Second Term'),
+        (3, 'Third Term'),
+        (4, 'Fourth Term'),
+    ])
+    start_date = models.DateField()
+    end_date = models.DateField()
+    is_current = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['school', 'name']
+        ordering = ['-start_date']
+    
+    def __str__(self):
+        return f"{self.school.name} - {self.name}"
+    
+    def save(self, *args, **kwargs):
+        # If this session is set as current, unset other current sessions
+        if self.is_current:
+            AcademicSession.objects.filter(school=self.school, is_current=True).update(is_current=False)
+        super().save(*args, **kwargs)
+
+
+class GradingPolicy(models.Model):
+    """School grading policy - weightage for different assessment types"""
+    ASSESSMENT_TYPES = (
+        ('exam', 'Exam'),
+        ('test', 'Test'),
+        ('quiz', 'Quiz'),
+        ('assignment', 'Assignment'),
+        ('continuous', 'Continuous Assessment'),
+        ('attendance', 'Attendance'),
+        ('project', 'Project'),
+    )
+    
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='grading_policies')
+    academic_session = models.ForeignKey(AcademicSession, on_delete=models.CASCADE, related_name='grading_policies', null=True, blank=True)
+    name = models.CharField(max_length=100, default="Default Grading Policy")
+    assessment_type = models.CharField(max_length=20, choices=ASSESSMENT_TYPES)
+    weightage = models.FloatField(default=0)  # Percentage (e.g., 60 for 60%)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['school', 'academic_session', 'assessment_type']
+        ordering = ['academic_session', 'assessment_type']
+    
+    def __str__(self):
+        session_name = self.academic_session.name if self.academic_session else "All Sessions"
+        return f"{self.school.name} - {session_name} - {self.assessment_type}: {self.weightage}%"
+
+
+class TerminalReport(models.Model):
+    """Computed terminal reports for students"""
+    REPORT_STATUS_CHOICES = (
+        ('draft', 'Draft'),
+        ('published', 'Published'),
+        ('archived', 'Archived'),
+    )
+    
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='terminal_reports')
+    student = models.ForeignKey('users.User', on_delete=models.CASCADE, limit_choices_to={'role': 'student'}, related_name='terminal_reports')
+    class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='terminal_reports')
+    academic_session = models.ForeignKey(AcademicSession, on_delete=models.CASCADE, related_name='terminal_reports')
+    
+    # Computed fields
+    total_marks = models.FloatField(default=0)
+    average_marks = models.FloatField(default=0)
+    position = models.IntegerField(null=True, blank=True)  # Rank in class
+    total_students = models.IntegerField(default=0)
+    grade = models.CharField(max_length=5, blank=True)  # Overall grade (A-F)
+    
+    # Attendance
+    total_days = models.IntegerField(default=0)
+    days_present = models.IntegerField(default=0)
+    attendance_percentage = models.FloatField(default=0)
+    
+    # Teacher remarks
+    form_teacher_remarks = models.TextField(blank=True)
+    principal_remarks = models.TextField(blank=True)
+    
+    status = models.CharField(max_length=20, choices=REPORT_STATUS_CHOICES, default='draft')
+    generated_by = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True, related_name='generated_reports', limit_choices_to={'role__in': ['teacher', 'school_admin']})
+    generated_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['student', 'class_obj', 'academic_session']
+        ordering = ['-academic_session', 'position']
+        indexes = [
+            models.Index(fields=['student', 'academic_session']),
+            models.Index(fields=['class_obj', 'academic_session']),
+        ]
+    
+    def __str__(self):
+        return f"{self.student.get_full_name()} - {self.academic_session.name} - Position: {self.position}"
+
+
+class SubjectScore(models.Model):
+    """Subject-wise scores for terminal reports"""
+    terminal_report = models.ForeignKey(TerminalReport, on_delete=models.CASCADE, related_name='subject_scores')
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
+    
+    # CA scores (for manual entry)
+    ca1_score = models.FloatField(null=True, blank=True)
+    ca2_score = models.FloatField(null=True, blank=True)
+    ca3_score = models.FloatField(null=True, blank=True)
+    exam_score = models.FloatField(null=True, blank=True)
+    
+    # Alternative: Link to grades for automatic calculation
+    use_grading_policy = models.BooleanField(default=False)
+    
+    # Computed
+    total_score = models.FloatField(default=0)
+    percentage = models.FloatField(default=0)
+    weighted_percentage = models.FloatField(default=0)  # After applying grading policy weightage
+    grade = models.CharField(max_length=5, blank=True)
+    remarks = models.CharField(max_length=100, blank=True)
+    
+    # Subject position
+    subject_position = models.IntegerField(null=True, blank=True)
+    subject_total_students = models.IntegerField(default=0)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['terminal_report', 'subject']
+    
+    def __str__(self):
+        return f"{self.terminal_report.student.get_full_name()} - {self.subject.name}: {self.total_score}"
+    
+    def calculate_weighted_score(self, grading_policies):
+        """
+        Calculate weighted score based on grading policy.
+        grading_policies: QuerySet of GradingPolicy for the session
+        """
+        total_weighted = 0
+        total_weight = 0
+        
+        # Get grades for this student/subject in this session
+        from apps.students.models import Grade
+        grades = Grade.objects.filter(
+            student=self.terminal_report.student,
+            subject=self.subject,
+            academic_session=self.terminal_report.academic_session,
+            is_locked=True
+        )
+        
+        for policy in grading_policies:
+            weight = policy.weightage
+            # Get grades of this assessment type
+            type_grades = grades.filter(assessment_type=policy.assessment_type)
+            
+            if type_grades.exists():
+                # Average percentage for this assessment type
+                avg_percentage = type_grades.aggregate(avg=models.Avg('percentage'))['avg'] or 0
+                total_weighted += avg_percentage * (weight / 100)
+                total_weight += weight
+        
+        if total_weight > 0:
+            # Normalize to 100
+            self.weighted_percentage = (total_weighted / total_weight) * 100 if total_weight > 0 else 0
+        else:
+            # Fall back to simple calculation
+            self.weighted_percentage = self.percentage
+        
+        return self.weighted_percentage
+    
+    def save(self, *args, **kwargs):
+        # Calculate total and percentage (simple calculation)
+        ca_total = (self.ca1_score or 0) + (self.ca2_score or 0) + (self.ca3_score or 0)
+        self.total_score = ca_total + (self.exam_score or 0)
+        max_score = 100  # Assuming 100 is max
+        self.percentage = (self.total_score / max_score * 100) if max_score > 0 else 0
+        
+        # Use weighted percentage if available, otherwise use simple
+        display_percentage = self.weighted_percentage if self.weighted_percentage > 0 else self.percentage
+        self.grade = self.calculate_grade(display_percentage)
+        super().save(*args, **kwargs)
+    
+    def calculate_grade(self, percentage=None):
+        if percentage is None:
+            percentage = self.percentage
+        if percentage >= 90:
+            return 'A'
+        elif percentage >= 80:
+            return 'B'
+        elif percentage >= 70:
+            return 'C'
+        elif percentage >= 60:
+            return 'D'
+        else:
+            return 'F'

@@ -178,7 +178,6 @@ class TeacherViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         ensure_connection()
         try:
-            # Get the user ID from the request (should be passed from frontend after user creation)
             user_id = request.data.get('user')
             if not user_id:
                 return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -204,6 +203,79 @@ class TeacherViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    def update(self, request, *args, **kwargs):
+        """
+        Update both the linked User record (name, email, phone, username)
+        and the TeacherProfile record (employee_id, qualification, etc.).
+        The frontend never sends the 'user' PK, so we cannot rely on the
+        default serializer validation — we update the ORM objects directly.
+        """
+        ensure_connection()
+        instance = self.get_object()
+
+        try:
+            # ── 1. Update User fields ──────────────────────────────────────
+            user = instance.user
+            user_dirty = False
+            for field in ('first_name', 'last_name', 'email', 'username', 'phone'):
+                value = request.data.get(field)
+                if value not in (None, ''):
+                    setattr(user, field, value)
+                    user_dirty = True
+            if request.data.get('password'):
+                user.set_password(request.data['password'])
+                user_dirty = True
+            if user_dirty:
+                user.save()
+
+            # ── 2. Update TeacherProfile fields ───────────────────────────
+            if 'employee_id' in request.data and request.data['employee_id']:
+                instance.employee_id = request.data['employee_id']
+            if 'qualification' in request.data:
+                instance.qualification = request.data['qualification']
+            if 'bio' in request.data:
+                instance.bio = request.data['bio']
+
+            # Accept both 'experience_years' (serializer name) and
+            # 'experience' (frontend field name)
+            exp_raw = request.data.get('experience_years') or request.data.get('experience')
+            if exp_raw is not None:
+                try:
+                    instance.experience_years = int(exp_raw)
+                except (ValueError, TypeError):
+                    pass
+
+            if 'department' in request.data:
+                instance.department_id = request.data['department'] or None
+
+            # ── 3. Extended personal fields ────────────────────────────────
+            if 'gender' in request.data:
+                instance.gender = request.data['gender'] or None
+            if 'date_of_birth' in request.data and request.data['date_of_birth']:
+                instance.date_of_birth = request.data['date_of_birth']
+            elif 'date_of_birth' in request.data and not request.data['date_of_birth']:
+                instance.date_of_birth = None
+            if 'address' in request.data:
+                instance.address = request.data['address'] or ''
+            if 'specialization' in request.data:
+                instance.specialization = request.data['specialization'] or ''
+
+            instance.save()
+
+            serializer = self.get_serializer(instance)
+            return Response(serializer.data)
+
+        except OperationalError:
+            connection.close()
+            return Response(
+                {'error': 'Database connection error. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class StudentViewSet(viewsets.ModelViewSet):
     queryset = StudentProfile.objects.all()
@@ -226,6 +298,72 @@ class StudentViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(user_id__in=student_ids)
 
         return queryset
+
+    def update(self, request, *args, **kwargs):
+        """
+        Update both the linked User record (name, email, phone, username)
+        and the StudentProfile record (level, department, date_of_birth, address, etc.).
+        The frontend never sends the 'user' PK, so we update ORM objects directly.
+        """
+        ensure_connection()
+        instance = self.get_object()
+
+        try:
+            # ── 1. Update User fields ──────────────────────────────────────
+            user = instance.user
+            user_dirty = False
+            for field in ('first_name', 'last_name', 'email', 'username', 'phone'):
+                value = request.data.get(field)
+                if value not in (None, ''):
+                    setattr(user, field, value)
+                    user_dirty = True
+            if request.data.get('password'):
+                user.set_password(request.data['password'])
+                user_dirty = True
+            if user_dirty:
+                user.save()
+
+            # ── 2. Update StudentProfile fields ───────────────────────────
+            if 'level' in request.data:
+                instance.level_id = request.data['level'] or None
+            if 'department' in request.data:
+                instance.department_id = request.data['department'] or None
+            if 'date_of_birth' in request.data and request.data['date_of_birth']:
+                instance.date_of_birth = request.data['date_of_birth']
+            elif 'date_of_birth' in request.data and not request.data['date_of_birth']:
+                instance.date_of_birth = None
+
+            # ── 3. Extended personal fields ────────────────────────────────
+            if 'gender' in request.data:
+                instance.gender = request.data['gender'] or None
+            if 'father_name' in request.data:
+                instance.father_name = request.data['father_name'] or ''
+            if 'mother_name' in request.data:
+                instance.mother_name = request.data['mother_name'] or ''
+            if 'religion' in request.data:
+                instance.religion = request.data['religion'] or ''
+            if 'father_occupation' in request.data:
+                instance.father_occupation = request.data['father_occupation'] or ''
+            if 'address' in request.data:
+                instance.address = request.data['address'] or ''
+            if 'roll_number' in request.data:
+                instance.roll_number = request.data['roll_number'] or ''
+
+            instance.save()
+
+            serializer = self.get_serializer(instance)
+            return Response(serializer.data)
+
+        except OperationalError:
+            connection.close()
+            return Response(
+                {'error': 'Database connection error. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     def create(self, request, *args, **kwargs):
         ensure_connection()

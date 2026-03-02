@@ -3,7 +3,7 @@ from apps.academics.models import (
     Faculty, Department, Level, Subject, Class,
     ClassSubject, Enrollment, Timetable, AcademicCalendarEvent,
     Exam, ExamResult, SchoolFees, SchoolEvent, Document, DocumentFolder, Notice, UserProfilePicture,
-    ClassTeacher, StudentClass, ClassSubjectTeacher
+    ClassTeacher, StudentClass, ClassSubjectTeacher, AcademicSession, TerminalReport, SubjectScore, GradingPolicy
 )
 from django.contrib.auth import get_user_model
 
@@ -335,18 +335,28 @@ class NoticeSerializer(serializers.ModelSerializer):
 
 class UserProfilePictureSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()
-    
+    display_url = serializers.SerializerMethodField()
+
     class Meta:
         model = UserProfilePicture
-        fields = ['id', 'user', 'user_name', 'picture', 'uploaded_at', 'updated_at']
-    
+        fields = [
+            'id', 'user', 'user_name', 
+            'picture', 'storage_path', 'storage_url', 'display_url',
+            'file_size', 'content_type', 'width', 'height',
+            'uploaded_at', 'updated_at'
+        ]
+        read_only_fields = ['user', 'uploaded_at', 'updated_at']
+
     def get_user_name(self, obj):
         try:
             if obj.user:
                 return obj.user.get_full_name() or obj.user.username
-        except:
+        except Exception:
             pass
         return None
+    
+    def get_display_url(self, obj):
+        return obj.display_url
 
 
 class ClassTeacherSerializer(serializers.ModelSerializer):
@@ -412,3 +422,82 @@ class ClassSubjectTeacherSerializer(serializers.ModelSerializer):
     
     def get_subject_code(self, obj):
         return obj.subject.code if obj.subject else None
+
+
+# ==================== GRADING SYSTEM - TERMINAL REPORTS SERIALIZERS ====================
+
+class GradingPolicySerializer(serializers.ModelSerializer):
+    assessment_type_display = serializers.CharField(source='get_assessment_type_display', read_only=True)
+    session_name = serializers.CharField(source='academic_session.name', read_only=True)
+    
+    class Meta:
+        model = GradingPolicy
+        fields = ['id', 'school', 'academic_session', 'session_name', 'name', 'assessment_type', 'assessment_type_display', 'weightage', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['school', 'created_at', 'updated_at']
+
+
+class AcademicSessionSerializer(serializers.ModelSerializer):
+    school = serializers.PrimaryKeyRelatedField(read_only=True)
+    
+    class Meta:
+        model = AcademicSession
+        fields = '__all__'
+
+
+class SubjectScoreSerializer(serializers.ModelSerializer):
+    subject_name = serializers.SerializerMethodField()
+    subject_code = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = SubjectScore
+        fields = ['id', 'subject', 'subject_name', 'subject_code', 'ca1_score', 'ca2_score', 'ca3_score', 'exam_score', 'total_score', 'percentage', 'grade', 'remarks', 'subject_position', 'subject_total_students']
+    
+    def get_subject_name(self, obj):
+        return obj.subject.name if obj.subject else None
+    
+    def get_subject_code(self, obj):
+        return obj.subject.code if obj.subject else None
+
+
+class TerminalReportSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
+    session_name = serializers.SerializerMethodField()
+    subject_scores = SubjectScoreSerializer(many=True, read_only=True)
+    generated_by_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = TerminalReport
+        fields = ['id', 'school', 'student', 'student_name', 'class_obj', 'class_name', 'academic_session', 'session_name', 'total_marks', 'average_marks', 'position', 'total_students', 'grade', 'total_days', 'days_present', 'attendance_percentage', 'form_teacher_remarks', 'principal_remarks', 'status', 'generated_by', 'generated_by_name', 'generated_at', 'subject_scores']
+    
+    def get_student_name(self, obj):
+        return obj.student.get_full_name() if obj.student else None
+    
+    def get_class_name(self, obj):
+        return obj.class_obj.name if obj.class_obj else None
+    
+    def get_session_name(self, obj):
+        return obj.academic_session.name if obj.academic_session else None
+    
+    def get_generated_by_name(self, obj):
+        return obj.generated_by.get_full_name() if obj.generated_by else None
+
+
+class TerminalReportListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for listing terminal reports"""
+    student_name = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
+    session_name = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = TerminalReport
+        fields = ['id', 'student', 'student_name', 'class_obj', 'class_name', 'academic_session', 'session_name', 'total_marks', 'average_marks', 'position', 'total_students', 'grade', 'status', 'generated_at']
+    
+    def get_student_name(self, obj):
+        return obj.student.get_full_name() if obj.student else None
+    
+    def get_class_name(self, obj):
+        return obj.class_obj.name if obj.class_obj else None
+    
+    def get_session_name(self, obj):
+        return obj.academic_session.name if obj.academic_session else None

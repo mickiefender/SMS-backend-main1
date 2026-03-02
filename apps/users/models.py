@@ -35,32 +35,49 @@ class User(AbstractUser):
 
 
 class TeacherProfile(models.Model):
+    GENDER_CHOICES = (('male', 'Male'), ('female', 'Female'), ('other', 'Other'))
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='teacher_profile')
     employee_id = models.CharField(max_length=50, unique=True)
     qualification = models.CharField(max_length=255, blank=True)
     experience_years = models.IntegerField(default=0)
     department = models.ForeignKey('academics.Department', on_delete=models.SET_NULL, null=True, blank=True)
     bio = models.TextField(blank=True)
+    # Extended personal fields
+    gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    address = models.TextField(blank=True)
+    specialization = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         verbose_name_plural = "Teacher Profiles"
-    
+
     def __str__(self):
         return f"{self.user.get_full_name()} - Teacher"
 
 
 class StudentProfile(models.Model):
+    GENDER_CHOICES = (('male', 'Male'), ('female', 'Female'), ('other', 'Other'))
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
     student_id = models.CharField(max_length=50, unique=True, blank=True)
     level = models.ForeignKey('academics.Level', on_delete=models.SET_NULL, null=True, blank=True)
     department = models.ForeignKey('academics.Department', on_delete=models.SET_NULL, null=True, blank=True)
     enrollment_date = models.DateField(auto_now_add=True)
     date_of_birth = models.DateField(null=True, blank=True)
+    # Extended personal fields
+    gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True, null=True)
+    father_name = models.CharField(max_length=255, blank=True)
+    mother_name = models.CharField(max_length=255, blank=True)
+    religion = models.CharField(max_length=100, blank=True)
+    father_occupation = models.CharField(max_length=255, blank=True)
+    address = models.TextField(blank=True)
+    roll_number = models.CharField(max_length=50, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     class Meta:
         verbose_name_plural = "Student Profiles"
     

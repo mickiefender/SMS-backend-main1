@@ -11,8 +11,9 @@ import mimetypes
 
 class SupabaseStorageService:
     def __init__(self):
-        self.supabase_url = os.environ.get('NEXT_PUBLIC_SUPABASE_URL')
-        self.supabase_key = os.environ.get('SUPABASE_ANON_KEY')
+        self.supabase_url = os.environ.get('SUPABASE_URL') or os.environ.get('NEXT_PUBLIC_SUPABASE_URL')
+        # Try to get service role key first (bypasses RLS), fall back to anon key
+        self.supabase_key = os.environ.get('SUPABASE_SERVICE_KEY') or os.environ.get('SUPABASE_ANON_KEY') or os.environ.get('NEXT_PUBLIC_SUPABASE_ANON_KEY')
         
         if not self.supabase_url or not self.supabase_key:
             raise ValueError("Supabase URL and key must be set in environment variables")
@@ -187,8 +188,10 @@ class SupabaseStorageService:
             Public URL for the file
         """
         try:
-            url = self.client.storage.from_(bucket_name).get_public_url(file_path)
-            return url.get('publicUrl', '')
+            # Construct public URL directly using the known format
+            # https://[project-ref].supabase.co/storage/v1/object/public/bucket/path
+            public_url = f"{self.supabase_url}/storage/v1/object/public/{bucket_name}/{file_path}"
+            return public_url
         except Exception as e:
             raise Exception(f"Failed to get public URL: {str(e)}")
     

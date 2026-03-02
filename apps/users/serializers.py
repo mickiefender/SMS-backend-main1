@@ -102,12 +102,25 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
     last_name = serializers.CharField(source='user.last_name', read_only=True)
     email = serializers.CharField(source='user.email', read_only=True)
     username = serializers.CharField(source='user.username', read_only=True)
-    
+    phone = serializers.CharField(source='user.phone', read_only=True)
+    profile_picture_url = serializers.SerializerMethodField()
+
     class Meta:
         model = TeacherProfile
-        fields = ['id', 'user', 'user_data', 'user_email', 'user_name', 'first_name', 'last_name', 'email', 'username', 'employee_id', 'qualification', 'experience_years', 'department', 'bio', 'created_at']
-        read_only_fields = ['id', 'created_at', 'user_email', 'user_name', 'first_name', 'last_name', 'email', 'username', 'user_data']
-    
+        fields = [
+            'id', 'user', 'user_data', 'user_email', 'user_name',
+            'first_name', 'last_name', 'email', 'username', 'phone',
+            'employee_id', 'qualification', 'experience_years', 'department', 'bio',
+            'gender', 'date_of_birth', 'address', 'specialization',
+            'profile_picture_url',
+            'created_at',
+        ]
+        read_only_fields = [
+            'id', 'created_at',
+            'user_email', 'user_name', 'first_name', 'last_name',
+            'email', 'username', 'phone', 'user_data',
+        ]
+
     def get_user_data(self, obj):
         if obj.user:
             return {
@@ -120,15 +133,29 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
                 'role': obj.user.role,
             }
         return None
-    
+
     def get_user_name(self, obj):
         if obj.user:
             return obj.user.get_full_name() or obj.user.username
         return None
+    
+    def get_profile_picture_url(self, obj):
+        """Get profile picture URL from UserProfilePicture or TeacherProfile"""
+        # First try the profile_picture relation
+        try:
+            if hasattr(obj, 'user') and obj.user:
+                profile_pic = getattr(obj.user, 'profile_picture', None)
+                if profile_pic:
+                    return profile_pic.display_url
+        except Exception:
+            pass
+        # Fallback to profile_picture_url field on teacher profile
+        return getattr(obj, 'profile_picture_url', None)
 
 
 class StudentProfileSerializer(serializers.ModelSerializer):
     user = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
     user_data = serializers.SerializerMethodField()
     user_email = serializers.CharField(source='user.email', read_only=True)
     user_name = serializers.SerializerMethodField()
@@ -136,12 +163,26 @@ class StudentProfileSerializer(serializers.ModelSerializer):
     last_name = serializers.CharField(source='user.last_name', read_only=True)
     email = serializers.CharField(source='user.email', read_only=True)
     username = serializers.CharField(source='user.username', read_only=True)
-    
+    phone = serializers.CharField(source='user.phone', read_only=True)
+    profile_picture_url = serializers.SerializerMethodField()
+
     class Meta:
         model = StudentProfile
-        fields = ['id', 'user', 'user_data', 'user_email', 'user_name', 'first_name', 'last_name', 'email', 'username', 'student_id', 'level', 'department', 'enrollment_date', 'created_at']
-        read_only_fields = ['id', 'enrollment_date', 'created_at', 'user_email', 'user_name', 'first_name', 'last_name', 'email', 'username', 'user_data', 'student_id']
-    
+        fields = [
+            'id', 'user', 'user_id', 'user_data', 'user_email', 'user_name',
+            'first_name', 'last_name', 'email', 'username', 'phone',
+            'student_id', 'level', 'department', 'enrollment_date',
+            'gender', 'father_name', 'mother_name', 'religion',
+            'father_occupation', 'address', 'roll_number', 'date_of_birth',
+            'profile_picture_url',
+            'created_at',
+        ]
+        read_only_fields = [
+            'id', 'enrollment_date', 'created_at', 'student_id', 'user_id',
+            'user_email', 'user_name', 'first_name', 'last_name',
+            'email', 'username', 'phone', 'user_data',
+        ]
+
     def get_user_data(self, obj):
         if obj.user:
             return {
@@ -154,8 +195,21 @@ class StudentProfileSerializer(serializers.ModelSerializer):
                 'role': obj.user.role,
             }
         return None
-    
+
     def get_user_name(self, obj):
         if obj.user:
             return obj.user.get_full_name() or obj.user.username
         return None
+    
+    def get_profile_picture_url(self, obj):
+        """Get profile picture URL from UserProfilePicture or StudentProfile"""
+        # First try the profile_picture relation
+        try:
+            if hasattr(obj, 'user') and obj.user:
+                profile_pic = getattr(obj.user, 'profile_picture', None)
+                if profile_pic:
+                    return profile_pic.display_url
+        except Exception:
+            pass
+        # Fallback to profile_picture_url field on student profile
+        return getattr(obj, 'profile_picture_url', None)

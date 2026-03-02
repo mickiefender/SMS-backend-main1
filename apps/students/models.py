@@ -17,10 +17,14 @@ class Grade(models.Model):
     student = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'student'}, related_name='grades')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
     assessment_type = models.CharField(max_length=20, choices=ASSESSMENT_TYPE_CHOICES)
+    academic_session = models.ForeignKey('academics.AcademicSession', on_delete=models.CASCADE, related_name='grades', null=True, blank=True)
     score = models.FloatField()
     max_score = models.FloatField(default=100)
     percentage = models.FloatField(editable=False)
     grade = models.CharField(max_length=5, blank=True)
+    is_locked = models.BooleanField(default=False)  # When true, grade cannot be edited
+    locked_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='locked_grades')
+    locked_at = models.DateTimeField(null=True, blank=True)
     recorded_date = models.DateField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -29,7 +33,29 @@ class Grade(models.Model):
         ordering = ['-recorded_date']
     
     def save(self, *args, **kwargs):
-        self.percentage = (self.score / self.max_score * 100) if self.max_score > 0 else 0
+        # Calculate raw percentage from score
+        raw_percentage = (self.score / self.max_score * 100) if self.max_score > 0 else 0
+        
+        # Apply grading policy weightage if academic_session is set
+        if self.academic_session_id:
+            from apps.academics.models import GradingPolicy
+            policy = GradingPolicy.objects.filter(
+                academic_session=self.academic_session,
+                assessment_type=self.assessment_type,
+                is_active=True
+            ).first()
+            
+            if policy and policy.weightage > 0:
+                # Apply the weightage: (raw_percentage * weightage / 100)
+                # Example: If test has 10% weightage and student scores 80%, 
+                # the stored percentage becomes 80 * 10/100 = 8
+                self.percentage = raw_percentage * (policy.weightage / 100)
+            else:
+                self.percentage = raw_percentage
+        else:
+            self.percentage = raw_percentage
+        
+        # Calculate the grade letter based on percentage
         self.grade = self.calculate_grade()
         super().save(*args, **kwargs)
     

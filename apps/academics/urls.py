@@ -5,7 +5,8 @@ from apps.academics.views import (
     ClassViewSet, ClassSubjectViewSet, EnrollmentViewSet, TimetableViewSet,
     AcademicCalendarEventViewSet, ExamViewSet, ExamResultViewSet, SchoolFeesViewSet,
     SchoolEventViewSet, NoticeViewSet, UserProfilePictureViewSet,
-    ClassTeacherViewSet, StudentClassViewSet, ClassSubjectTeacherViewSet
+    ClassTeacherViewSet, StudentClassViewSet, ClassSubjectTeacherViewSet,
+    AcademicSessionViewSet, TerminalReportViewSet, GradingPolicyViewSet
 )
 from apps.academics.views_documents import DocumentViewSet, DocumentFolderViewSet
 
@@ -30,6 +31,9 @@ router.register(r'documents', DocumentViewSet, basename='document')
 router.register(r'document-folders', DocumentFolderViewSet, basename='document-folder')
 router.register(r'notices', NoticeViewSet, basename='notice')
 router.register(r'profile-pictures', UserProfilePictureViewSet, basename='profile-picture')
+router.register(r'academic-sessions', AcademicSessionViewSet, basename='academic-session')
+router.register(r'terminal-reports', TerminalReportViewSet, basename='terminal-report')
+router.register(r'grading-policies', GradingPolicyViewSet, basename='grading-policy')
 
 urlpatterns = [
     path('', include(router.urls)),

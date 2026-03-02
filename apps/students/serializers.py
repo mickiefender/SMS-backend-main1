@@ -5,6 +5,7 @@ from apps.users.models import StudentProfile
 
 class GradeSerializer(serializers.ModelSerializer):
     subject_name = serializers.CharField(source='subject.name', read_only=True)
+    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
     
     class Meta:
         model = Grade
@@ -21,6 +22,7 @@ class StudentGPASerializer(serializers.ModelSerializer):
 
 class StudentPortalSerializer(serializers.Serializer):
     profile = serializers.SerializerMethodField()
+    profile_picture_url = serializers.SerializerMethodField()
     enrollments = serializers.SerializerMethodField()
     grades = serializers.SerializerMethodField()
     gpa = serializers.SerializerMethodField()
@@ -33,6 +35,18 @@ class StudentPortalSerializer(serializers.Serializer):
                 'department': obj.student_profile.department.name if obj.student_profile.department else None,
                 'enrollment_date': obj.student_profile.enrollment_date,
             }
+        return None
+    
+    def get_profile_picture_url(self, obj):
+        """Get profile picture URL from UserProfilePicture"""
+        try:
+            if hasattr(obj, 'profile_picture') and obj.profile_picture:
+                return obj.profile_picture.display_url
+        except Exception:
+            pass
+        # Also check in student_profile
+        if hasattr(obj, 'student_profile') and obj.student_profile:
+            return getattr(obj.student_profile, 'profile_picture_url', None)
         return None
     
     def get_enrollments(self, obj):

@@ -147,9 +147,16 @@ class DocumentViewSet(viewsets.ModelViewSet):
         # Students see documents for their classes
         if user_role == 'student':
             if hasattr(user, 'school') and user.school:
+                from apps.academics.models import StudentClass
+                student_class_ids = StudentClass.objects.filter(
+                    student=user
+                ).values_list('class_obj', flat=True)
                 return Document.objects.filter(
-                    Q(school=user.school) & Q(related_class__in=user.classes.all())
-                )
+                    Q(school=user.school) & (
+                        Q(related_class__in=student_class_ids) |
+                        Q(shared_with_classes__in=student_class_ids)
+                    )
+                ).distinct()
             return Document.objects.none()
         
         return Document.objects.none()
@@ -353,67 +360,238 @@ class DocumentViewSet(viewsets.ModelViewSet):
     def generate_questions(self, request, pk=None):
         """
         Generate AI questions from a document.
-        This endpoint extracts text from the document and generates questions.
+        Downloads the file from Supabase storage, extracts text, and calls the AI service.
         URL: /documents/{id}/generate_questions/
         """
         document = self.get_object()
-        
-        num_questions = request.data.get('num_questions', 5)
+
+        num_questions = int(request.data.get('num_questions', 5))
         question_type = request.data.get('question_type', 'multiple_choice')
         difficulty = request.data.get('difficulty', 'medium')
-        
+
         # Verify permission
         if document.uploaded_by != request.user and not hasattr(request.user, 'is_admin'):
             return Response(
                 {'error': 'You do not have permission to generate questions from this document'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
-        # Extract text from document (simplified - in production, use proper text extraction)
+
         try:
-            # For now, return a placeholder response
-            # In production, you would:
-            # 1. Download the file from storage
-            # 2. Extract text using libraries like PyPDF2, python-docx, etc.
-            # 3. Send text to AI service (OpenAI, etc.)
-            # 4. Return generated questions
+            import io
+            import requests as http_requests
+
+            # ── 1. Resolve the file URL ──────────────────────────────────────
+            file_url = None
+            if document.file:
+                # document.file may be a FieldFile or a plain string URL
+                raw = str(document.file)
+                if raw.startswith('http'):
+                    file_url = raw
+                else:
+                    # Build absolute URL from the request
+                    file_url = request.build_absolute_uri(document.file.url)
+
+            if not file_url:
+                return Response(
+                    {'error': 'Document has no associated file.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Also add more logging for debugging
+            print(f"[generate_questions] Raw file URL: {file_url}")
+            print(f"[generate_questions] Document file field: {document.file}")
+            print(f"[generate_questions] Document file type: {type(document.file)}")
             
-            # Placeholder response
-            questions = []
-            for i in range(int(num_questions)):
-                if question_type == 'multiple_choice':
-                    questions.append({
-                        'question': f'Sample question {i+1} from {document.title}',
-                        'options': ['Option A', 'Option B', 'Option C', 'Option D'],
-                        'correct_answer': 'A',
-                        'explanation': 'This is a sample explanation.'
-                    })
-                elif question_type == 'true_false':
-                    questions.append({
-                        'question': f'Sample true/false question {i+1} from {document.title}',
-                        'correct_answer': 'True',
-                        'explanation': 'This is a sample explanation.'
-                    })
-                else:  # short_answer
-                    questions.append({
-                        'question': f'Sample short answer question {i+1} from {document.title}',
-                        'model_answer': 'This is a sample model answer.',
-                        'explanation': 'This is a sample explanation.'
-                    })
+            # Try to get filename from document.file.name if available
+            if hasattr(document.file, 'name'):
+                print(f"[generate_questions] document.file.name: {document.file.name}")
             
-            return Response({
-                'document_id': document.id,
-                'document_title': document.title,
-                'questions': questions,
-                'metadata': {
-                    'num_questions': len(questions),
-                    'question_type': question_type,
-                    'difficulty': difficulty,
-                    'generated_at': 'now'
-                }
-            })
+            # Also try to get filename from document title or file field
+            # Sometimes the file URL doesn't have proper extension
+            # Check if document.file.name has the extension
+            db_filename = getattr(document.file, 'name', '') or ''
+            print(f"[generate_questions] DB filename: {db_filename}")
+
+            # ── 2. Download the file ─────────────────────────────────────────
+            try:
+                file_response = http_requests.get(file_url, timeout=30)
+                file_response.raise_for_status()
+                file_bytes = file_response.content
+            except Exception as dl_err:
+                print(f"[generate_questions] Download failed: {dl_err}")
+                return Response(
+                    {'error': f'Could not download document file: {str(dl_err)}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # ── 3. Extract text based on file type ───────────────────────────
+            filename = file_url.split('?')[0].lower()   # strip query params
             
+            # Also try to get filename from database if URL doesn't have extension
+            db_filename = getattr(document.file, 'name', '') or ''
+            
+            # If filename from URL doesn't have proper extension, use database filename
+            if db_filename and not any(filename.endswith(ext) for ext in ['.pdf', '.docx', '.doc', '.txt']):
+                filename = db_filename.lower()
+                print(f"[generate_questions] Using DB filename: {filename}")
+            
+            print(f"[generate_questions] Filename after processing: {filename}")
+            
+            # Try to detect MIME type from content if extension detection fails
+            import mimetypes
+            detected_mime = None
+            try:
+                # Read first bytes to detect MIME type
+                import magic
+                detected_mime = magic.from_buffer(file_bytes[:1024], mime=True)
+                print(f"[generate_questions] Detected MIME type: {detected_mime}")
+            except Exception as mime_err:
+                print(f"[generate_questions] MIME detection error: {mime_err}")
+            
+            extracted_text = ""
+            extraction_method = "none"
+
+            # Check file extension - also check MIME type as fallback
+            is_pdf = filename.endswith('.pdf') or detected_mime == 'application/pdf'
+            is_docx = filename.endswith('.docx') or filename.endswith('.doc') or detected_mime in ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword']
+            is_txt = filename.endswith('.txt') or detected_mime == 'text/plain' or detected_mime == 'application/text'
+            
+            print(f"[generate_questions] File detection - is_pdf: {is_pdf}, is_docx: {is_docx}, is_txt: {is_txt}, mime: {detected_mime}")
+
+            if is_pdf:
+                try:
+                    # Try pymupdf first (better for both text and image-based PDFs)
+                    try:
+                        import fitz  # pymupdf
+                        doc = fitz.open(stream=file_bytes, filetype="pdf")
+                        pages_text = []
+                        for page_num, page in enumerate(doc):
+                            text = page.get_text()
+                            if text and text.strip():
+                                pages_text.append(text)
+                            else:
+                                # Page has no text, try to extract images for OCR
+                                print(f"[generate_questions] Page {page_num + 1} has no extractable text, checking for images...")
+                                try:
+                                    import pytesseract
+                                    from PIL import Image
+                                    pix = page.get_pixmap(dpi=200)
+                                    img_data = pix.tobytes("png")
+                                    img = Image.open(io.BytesIO(img_data))
+                                    ocr_text = pytesseract.image_to_string(img)
+                                    if ocr_text and ocr_text.strip():
+                                        pages_text.append(ocr_text)
+                                        print(f"[generate_questions] OCR extracted {len(ocr_text)} chars from page {page_num + 1}")
+                                except Exception as ocr_err:
+                                    print(f"[generate_questions] OCR failed for page {page_num + 1}: {ocr_err}")
+                        doc.close()
+                        extracted_text = "\n".join(pages_text)
+                        extraction_method = "pymupdf"
+                        print(f"[generate_questions] pymupdf extracted {len(extracted_text)} chars from PDF")
+                    except ImportError:
+                        # Fallback to PyPDF2 if pymupdf not available
+                        import PyPDF2
+                        pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+                        pages_text = []
+                        for page in pdf_reader.pages:
+                            page_text = page.extract_text()
+                            if page_text:
+                                pages_text.append(page_text)
+                        extracted_text = "\n".join(pages_text)
+                        extraction_method = "pypdf2"
+                        print(f"[generate_questions] PyPDF2 extracted {len(extracted_text)} chars from {len(pdf_reader.pages)} pages")
+                except Exception as pdf_err:
+                    print(f"[generate_questions] PDF extraction error: {pdf_err}")
+                    extracted_text = ""
+
+            elif filename.endswith('.docx'):
+                try:
+                    import docx
+                    doc_obj = docx.Document(io.BytesIO(file_bytes))
+                    extracted_text = "\n".join(
+                        para.text for para in doc_obj.paragraphs if para.text.strip()
+                    )
+                    extraction_method = "python-docx"
+                    print(f"[generate_questions] DOCX extracted {len(extracted_text)} chars")
+                except Exception as docx_err:
+                    print(f"[generate_questions] DOCX extraction error: {docx_err}")
+                    extracted_text = ""
+
+            elif filename.endswith('.txt'):
+                try:
+                    extracted_text = file_bytes.decode('utf-8', errors='ignore')
+                    extraction_method = "plain-text"
+                    print(f"[generate_questions] TXT extracted {len(extracted_text)} chars")
+                except Exception as txt_err:
+                    print(f"[generate_questions] TXT extraction error: {txt_err}")
+                    extracted_text = ""
+
+            else:
+                # Attempt a plain UTF-8 decode as a last resort
+                try:
+                    extracted_text = file_bytes.decode('utf-8', errors='ignore')
+                    extraction_method = "fallback-utf8"
+                    print(f"[generate_questions] Unknown type — decoded {len(extracted_text)} chars")
+                except Exception:
+                    extracted_text = ""
+
+            # ── 4. Validate extracted text ───────────────────────────────────
+            print(f"[generate_questions] Extraction method: {extraction_method}, extracted length: {len(extracted_text)} chars")
+            
+            if not extracted_text or len(extracted_text.strip()) < 50:
+                return Response(
+                    {
+                        'error': (
+                            'Could not extract enough text from this document. '
+                            'Please ensure the file is a readable PDF, DOCX, or TXT file '
+                            'and is not password-protected or image-only. '
+                            f'(Extraction method: {extraction_method})'
+                        ),
+                        'extraction_details': {
+                            'method': extraction_method,
+                            'chars_extracted': len(extracted_text),
+                            'file_type': filename.split('.')[-1] if '.' in filename else 'unknown'
+                        }
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Truncate to avoid exceeding token limits (~12 000 chars ≈ 3 000 tokens)
+            material_content = extracted_text[:12000]
+
+            # ── 5. Call the AI service ───────────────────────────────────────
+            school_name = getattr(request.user, 'school', None)
+            school_name_str = school_name.name if school_name else "School"
+
+            from apps.academics.ai_service import generate_school_ai_questions
+
+            subject = getattr(document, 'related_subject', None)
+            subject_str = subject.name if subject and hasattr(subject, 'name') else ""
+
+            print(f"[generate_questions] Calling AI for doc '{document.title}' — {num_questions} {question_type} questions")
+
+            result = generate_school_ai_questions(
+                school_name=school_name_str,
+                material_content=material_content,
+                num_questions=num_questions,
+                question_type=question_type,
+                difficulty=difficulty,
+                subject=subject_str,
+                is_topic=False
+            )
+
+            print(f"[generate_questions] AI result: {result}")
+
+            if result and 'error' not in result:
+                return Response(result, status=status.HTTP_200_OK)
+            else:
+                error_msg = result.get('error', 'Failed to generate questions') if result else 'Failed to generate questions'
+                return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
+
         except Exception as e:
+            import traceback
+            print(f"[generate_questions] Unexpected error: {str(e)}")
+            traceback.print_exc()
             return Response(
                 {'error': f'Failed to generate questions: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -497,3 +675,4 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to generate questions: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
