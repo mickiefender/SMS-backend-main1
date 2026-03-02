@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'apps.attendance',
     'apps.assignments',
     'apps.billing',
+    'apps.payments',
     'apps.students',
     'apps.storage',
     'apps.messaging',
@@ -223,3 +224,13 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+# Paystack Configuration
+PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', 'sk_test_xxxxxxxxxxxxxxxxxxxxx')
+PAYSTACK_PUBLIC_KEY = os.environ.get('PAYSTACK_PUBLIC_KEY', 'pk_test_xxxxxxxxxxxxxxxxxxxxx')
+PAYSTACK_WEBHOOK_SECRET = os.environ.get('PAYSTACK_WEBHOOK_SECRET', '')
+PAYSTACK_BASE_URL = 'https://api.paystack.co'
+PAYSTACK_CURRENCY = 'NGN'
+
+# Frontend URL (for payment callbacks)
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')

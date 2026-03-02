@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Receipt - {{ receipt.receipt_number }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .receipt-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .receipt-header {
+            background: #1a73e8;
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .receipt-header h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+        .receipt-header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        .receipt-body {
+            padding: 30px;
+        }
+        .receipt-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px dashed #ddd;
+        }
+        .receipt-info div {
+            text-align: left;
+        }
+        .receipt-info .label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+        .receipt-info .value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+        }
+        .amount-section {
+            text-align: center;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .amount-section .label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+        }
+        .amount-section .amount {
+            font-size: 36px;
+            font-weight: 700;
+            color: #1a73e8;
+            margin: 10px 0;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-success {
+            background: #e6f4ea;
+            color: #1e8e3e;
+        }
+        .details-table {
+            width: 100%;
+            margin: 20px 0;
+        }
+        .details-table tr {
+            border-bottom: 1px solid #eee;
+        }
+        .details-table td {
+            padding: 10px 0;
+            font-size: 14px;
+        }
+        .details-table td:first-child {
+            color: #666;
+        }
+        .details-table td:last-child {
+            text-align: right;
+            font-weight: 500;
+            color: #333;
+        }
+        .receipt-footer {
+            text-align: center;
+            padding: 20px 30px;
+            background: #f8f9fa;
+            font-size: 12px;
+            color: #666;
+        }
+        @media print {
+            body { background: white; padding: 0; }
+            .receipt-container { box-shadow: none; }
+            .no-print { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="receipt-container">
+        <div class="receipt-header">
+            <h1>{{ school_name }}</h1>
+            <p>Payment Receipt</p>
+        </div>
+
+        <div class="receipt-body">
+            <div class="receipt-info">
+                <div>
+                    <div class="label">Receipt Number</div>
+                    <div class="value">{{ receipt.receipt_number }}</div>
+                </div>
+                <div>
+                    <div class="label">Date</div>
+                    <div class="value">{{ payment.created_at|date:"M d, Y" }}</div>
+                </div>
+                <div>
+                    <div class="label">Status</div>
+                    <div class="value">
+                        <span class="status-badge status-success">Paid</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="amount-section">
+                <div class="label">Amount Paid</div>
+                <div class="amount">₦{{ payment.amount|floatformat:2 }}</div>
+            </div>
+
+            <table class="details-table">
+                <tr>
+                    <td>Student Name</td>
+                    <td>{{ student_name }}</td>
+                </tr>
+                <tr>
+                    <td>Invoice Number</td>
+                    <td>{{ payment.invoice.invoice_number }}</td>
+                </tr>
+                <tr>
+                    <td>Payment Method</td>
+                    <td>{{ payment.get_payment_method_display }}</td>
+                </tr>
+                <tr>
+                    <td>Transaction Reference</td>
+                    <td>{{ payment.transaction_reference }}</td>
+                </tr>
+                {% if payment.paystack_reference %}
+                <tr>
+                    <td>Paystack Reference</td>
+                    <td>{{ payment.paystack_reference }}</td>
+                </tr>
+                {% endif %}
+                {% if payment.paystack_channel %}
+                <tr>
+                    <td>Payment Channel</td>
+                    <td>{{ payment.paystack_channel|title }}</td>
+                </tr>
+                {% endif %}
+            </table>
+        </div>
+
+        <div class="receipt-footer">
+            <p>This is a computer-generated receipt and does not require a signature.</p>
+            <p style="margin-top: 5px;">Thank you for your payment!</p>
+        </div>
+    </div>
+
+    <div class="no-print" style="text-align: center; margin-top: 20px;">
+        <button onclick="window.print()" style="
+            padding: 10px 30px;
+            background: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        ">Print Receipt</button>
+    </div>
+</body>
+</html>
