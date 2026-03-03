@@ -21,3 +21,4 @@ pymupdf==1.23.8
 pytesseract==0.3.10
 python-magic==0.4.27
 python-dotenv==1.0.0
+resend>=0.7.0

@@ -1,7 +1,8 @@
 from django.contrib import admin
 from .models import (
     FeeStructure, Invoice, InvoiceItem,
-    Payment, PaymentReceipt, PaystackWebhookLog
+    Payment, PaymentReceipt, PaystackWebhookLog,
+    Notification, SchoolRevenue, SchoolBankAccount, WithdrawalRequest
 )
 
 
@@ -56,3 +57,40 @@ class PaystackWebhookLogAdmin(admin.ModelAdmin):
     search_fields = ['reference', 'event_type']
     readonly_fields = ['event_type', 'payload', 'reference', 'processed',
                        'processing_error', 'ip_address', 'created_at']
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ['title', 'user', 'school', 'notification_type', 'is_read', 'created_at']
+    list_filter = ['notification_type', 'is_read', 'created_at']
+    search_fields = ['title', 'message', 'user__first_name', 'user__last_name']
+    readonly_fields = ['created_at']
+
+
+@admin.register(SchoolRevenue)
+class SchoolRevenueAdmin(admin.ModelAdmin):
+    list_display = ['school', 'total_revenue', 'total_withdrawn', 'available_balance', 'updated_at']
+    search_fields = ['school__name']
+    readonly_fields = ['updated_at']
+
+
+@admin.register(SchoolBankAccount)
+class SchoolBankAccountAdmin(admin.ModelAdmin):
+    list_display = ['school', 'account_type', 'bank_name', 'account_number',
+                    'account_name', 'is_default', 'is_verified', 'created_at']
+    list_filter = ['account_type', 'is_default', 'is_verified']
+    search_fields = ['school__name', 'bank_name', 'account_number', 'account_name']
+    readonly_fields = ['recipient_code', 'created_at', 'updated_at']
+
+
+@admin.register(WithdrawalRequest)
+class WithdrawalRequestAdmin(admin.ModelAdmin):
+    list_display = ['school', 'requested_by', 'amount', 'withdrawal_method',
+                    'status', 'created_at', 'completed_at']
+    list_filter = ['status', 'withdrawal_method', 'created_at']
+    search_fields = ['school__name', 'requested_by__first_name', 'requested_by__last_name']
+    readonly_fields = [
+        'otp_code', 'otp_created_at', 'otp_verified_at',
+        'paystack_transfer_code', 'paystack_transfer_reference',
+        'created_at', 'updated_at'
+    ]

@@ -260,3 +260,206 @@ class PaymentReceipt(models.Model):
         timestamp = timezone.now().strftime('%Y%m%d')
         random_part = uuid.uuid4().hex[:6].upper()
         return f"{prefix}-{timestamp}-{random_part}"
+
+
+class Notification(models.Model):
+    """In-app notifications for the dashboard notification bell."""
+
+    NOTIFICATION_TYPE_CHOICES = [
+        ('payment_received', 'Payment Received'),
+        ('payment_confirmed', 'Payment Confirmed'),
+        ('withdrawal_requested', 'Withdrawal Requested'),
+        ('withdrawal_completed', 'Withdrawal Completed'),
+        ('withdrawal_failed', 'Withdrawal Failed'),
+        ('invoice_created', 'Invoice Created'),
+        ('general', 'General'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    school = models.ForeignKey(
+        'schools.School',
+        on_delete=models.CASCADE,
+        related_name='payment_notifications'
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='payment_notifications'
+    )
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    notification_type = models.CharField(
+        max_length=30,
+        choices=NOTIFICATION_TYPE_CHOICES,
+        default='general'
+    )
+    is_read = models.BooleanField(default=False)
+    related_payment = models.ForeignKey(
+        Payment,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notifications'
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'is_read']),
+            models.Index(fields=['school', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"Notification: {self.title} - {self.user.get_full_name()}"
+
+
+class SchoolRevenue(models.Model):
+    """Tracks total revenue collected for each school."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    school = models.OneToOneField(
+        'schools.School',
+        on_delete=models.CASCADE,
+        related_name='revenue'
+    )
+    total_revenue = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    total_withdrawn = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    available_balance = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Revenue: {self.school.name} - ₦{self.available_balance}"
+
+    def add_revenue(self, amount):
+        """Add revenue from a confirmed payment."""
+        from decimal import Decimal
+        amount = Decimal(str(amount))
+        self.total_revenue += amount
+        self.available_balance += amount
+        self.save(update_fields=['total_revenue', 'available_balance', 'updated_at'])
+
+    def deduct_for_withdrawal(self, amount):
+        """Deduct balance for a withdrawal."""
+        from decimal import Decimal
+        amount = Decimal(str(amount))
+        if amount > self.available_balance:
+            raise ValueError("Insufficient balance for withdrawal")
+        self.total_withdrawn += amount
+        self.available_balance -= amount
+        self.save(update_fields=['total_withdrawn', 'available_balance', 'updated_at'])
+
+
+class SchoolBankAccount(models.Model):
+    """Bank or MOMO account details for school withdrawals."""
+
+    ACCOUNT_TYPE_CHOICES = [
+        ('bank', 'Bank Account'),
+        ('momo', 'Mobile Money'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    school = models.ForeignKey(
+        'schools.School',
+        on_delete=models.CASCADE,
+        related_name='bank_accounts'
+    )
+    account_type = models.CharField(max_length=10, choices=ACCOUNT_TYPE_CHOICES)
+    bank_name = models.CharField(max_length=255)
+    bank_code = models.CharField(max_length=20)
+    account_number = models.CharField(max_length=30)
+    account_name = models.CharField(max_length=255)
+    # Paystack transfer recipient code (created via Paystack API)
+    recipient_code = models.CharField(max_length=255, blank=True)
+    is_default = models.BooleanField(default=False)
+    is_verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-is_default', '-created_at']
+
+    def __str__(self):
+        return f"{self.school.name} - {self.bank_name} ({self.account_number})"
+
+
+class WithdrawalRequest(models.Model):
+    """Withdrawal requests from schools with OTP verification."""
+
+    STATUS_CHOICES = [
+        ('pending_otp', 'Pending OTP Verification'),
+        ('otp_verified', 'OTP Verified'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    WITHDRAWAL_METHOD_CHOICES = [
+        ('bank', 'Bank Transfer'),
+        ('momo', 'Mobile Money'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    school = models.ForeignKey(
+        'schools.School',
+        on_delete=models.CASCADE,
+        related_name='withdrawal_requests'
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='withdrawal_requests'
+    )
+    bank_account = models.ForeignKey(
+        SchoolBankAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='withdrawals'
+    )
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+    withdrawal_method = models.CharField(max_length=10, choices=WITHDRAWAL_METHOD_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending_otp')
+
+    # OTP fields
+    otp_code = models.CharField(max_length=6, blank=True)
+    otp_created_at = models.DateTimeField(null=True, blank=True)
+    otp_verified_at = models.DateTimeField(null=True, blank=True)
+
+    # Paystack transfer fields
+    paystack_transfer_code = models.CharField(max_length=255, blank=True)
+    paystack_transfer_reference = models.CharField(max_length=255, blank=True)
+
+    notes = models.TextField(blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Withdrawal: {self.school.name} - ₦{self.amount} ({self.status})"
+
+    def generate_otp(self):
+        """Generate a 6-digit OTP code."""
+        import random
+        self.otp_code = str(random.randint(100000, 999999))
+        self.otp_created_at = timezone.now()
+        self.save(update_fields=['otp_code', 'otp_created_at', 'updated_at'])
+        return self.otp_code
+
+    def verify_otp(self, code):
+        """Verify the OTP code. Valid for 10 minutes."""
+        from datetime import timedelta
+        if not self.otp_code or not self.otp_created_at:
+            return False
+        if timezone.now() > self.otp_created_at + timedelta(minutes=10):
+            return False
+        if self.otp_code != code:
+            return False
+        self.otp_verified_at = timezone.now()
+        self.status = 'otp_verified'
+        self.save(update_fields=['otp_verified_at', 'status', 'updated_at'])
+        return True

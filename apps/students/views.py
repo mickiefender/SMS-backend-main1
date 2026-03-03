@@ -354,6 +354,51 @@ class StudentBillingViewSet(viewsets.ViewSet):
         return Response(BillingSerializer(billing, many=True).data)
 
 
+class StudentPaymentHistoryViewSet(viewsets.ViewSet):
+    """Payment history for the student dashboard."""
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    @action(detail=False, methods=['get'])
+    def my_payments(self, request):
+        """Get all payment history for the logged-in student."""
+        from apps.payments.models import Payment
+        from apps.payments.serializers import StudentPaymentHistorySerializer
+
+        payments = Payment.objects.filter(
+            student=request.user,
+            status='success'
+        ).select_related('invoice', 'school').order_by('-created_at')
+
+        serializer = StudentPaymentHistorySerializer(payments, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def my_invoices(self, request):
+        """Get all invoices for the logged-in student."""
+        from apps.payments.models import Invoice
+        from apps.payments.serializers import InvoiceSerializer
+
+        invoices = Invoice.objects.filter(
+            student=request.user
+        ).prefetch_related('items').order_by('-created_at')
+
+        serializer = InvoiceSerializer(invoices, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def my_notifications(self, request):
+        """Get payment notifications for the student."""
+        from apps.payments.models import Notification
+        from apps.payments.serializers import NotificationSerializer
+
+        notifications = Notification.objects.filter(
+            user=request.user
+        ).order_by('-created_at')[:50]
+
+        serializer = NotificationSerializer(notifications, many=True)
+        return Response(serializer.data)
+
+
 class StudentSocialClubViewSet(viewsets.ModelViewSet):
     queryset = StudentSocialClub.objects.all()
     serializer_class = StudentSocialClubSerializer
