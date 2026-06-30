@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>New Fee Assigned - {{ school_name }}</title>
+  <style>
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; }
+    .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 30px; text-align: center; color: white; }
+    .logo { height: 60px; max-width: 200px; margin-bottom: 10px; }
+    .school-name { font-size: 24px; font-weight: 700; margin: 0; }
+    .content { padding: 40px; }
+    .fee-amount { font-size: 36px; font-weight: 800; color: #dc2626; text-align: center; margin: 20px 0; }
+    .urgency { background: #fef2f2; border-left: 4px solid #dc2626; padding: 20px; margin: 24px 0; border-radius: 8px; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0; }
+    .detail-card { background: #f8fafc; padding: 20px; border-radius: 8px; text-align: center; }
+    .label { font-size: 14px; color: #64748b; font-weight: 500; }
+    .value { font-size: 20px; font-weight: 700; color: #1e293b; }
+    .pay-button { display: inline-block; background: #10b981; color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 18px; margin: 24px 0; box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
+    .footer { background: #f1f5f9; padding: 30px; text-align: center; font-size: 14px; color: #64748b; }
+    @media (max-width: 600px) { .detail-grid { grid-template-columns: 1fr; } .content { padding: 24px; } }
+  </style>
+</head>
+<body>
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+    <tr>
+      <td style="padding: 40px 20px;">
+        <table role="presentation" class="container" cellspacing="0" cellpadding="0" border="0">
+          <tr>
+            <td class="header">
+              {% if logo_url %}
+              <img src="{{ logo_url }}" alt="{{ school_name }} Logo" class="logo">
+              {% endif %}
+              <h1 class="school-name">{{ school_name }}</h1>
+              <p style="margin: 0; opacity: 0.95; font-size: 18px;">💰 New Fee Assignment</p>
+            </td>
+          </tr>
+          <tr>
+            <td class="content">
+              <h2 style="font-size: 24px; color: #1e293b; margin-bottom: 16px;">{{ fee_name }} Fee Assigned</h2>
+              
+              <div class="fee-amount">₦{{ amount }}</div>
+              
+              <div class="urgency">
+                <h3 style="margin: 0 0 8px 0; color: #dc2626;">⏰ Due Date Approaching</h3>
+                <p style="margin: 0; font-size: 16px;">Please complete payment before <strong>{{ due_date|date:'M d, Y' }}</strong> to avoid late fees.</p>
+              </div>
+              
+              <div class="detail-grid">
+                <div class="detail-card">
+                  <div class="label">Fee Amount</div>
+                  <div class="value">₦{{ amount }}</div>
+                </div>
+                <div class="detail-card">
+                  <div class="label">Due Date</div>
+                  <div class="value">{{ due_date|date:'MMM d, Y' }}</div>
+                </div>
+              </div>
+              
+              <div style="text-align: center;">
+                <a href="{{ frontend_url }}/dashboard/school-admin/collect-fees" class="pay-button">Pay Now via Paystack</a>
+              </div>
+              
+              <p style="font-size: 14px; color: #64748b; text-align: center; margin-top: 30px;">
+                This fee has been assigned to all students. Contact admin if you have questions.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td class="footer">
+              <p>&copy; {{ 'now'|date:'Y' }} {{ school_name }}. Secure payments powered by Paystack.</p>
+              <p><a href="{{ frontend_url|default:'https://yourapp.com' }}">Fees Portal</a> | 
+              <a href="[unsubscribe]" style="text-decoration: underline;">Unsubscribe</a></p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+

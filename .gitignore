@@ -1,0 +1,13 @@
+.env
+.env.*.env
+.env.*
+.env.local
+cat <<EOF > .gitignore
+
+__pycache__/
+*.pyc
+*.sqlite3
+.DS_Store
+EOF
+media/
+venv/

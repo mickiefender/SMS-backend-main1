@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Confirmation - {{ school_name }}</title>
+  <style>
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; }
+    .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 30px; text-align: center; color: white; }
+    .logo { height: 60px; max-width: 200px; margin-bottom: 10px; }
+    .school-name { font-size: 24px; font-weight: 700; margin: 0; }
+    .content { padding: 40px; }
+    .payment-card { background: white; padding: 24px; border-radius: 12px; border: 1px solid #e2e8f0; margin: 24px 0; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+    .detail-row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #f1f5f9; }
+    .detail-row:last-child { border-bottom: none; }
+    .label { color: #64748b; font-weight: 500; }
+    .value { font-weight: 600; color: #1e293b; }
+    .amount-paid { color: #10b981; font-size: 1.2em; font-weight: 800; }
+    .status-paid { background: #dcfce7; color: #166534; padding: 8px 16px; border-radius: 9999px; font-weight: 600; display: inline-block; }
+    .footer { background: #f1f5f9; padding: 30px; text-align: center; font-size: 14px; color: #64748b; }
+    @media (max-width: 600px) { .content { padding: 20px; } .detail-row { flex-direction: column; gap: 4px; } }
+  </style>
+</head>
+<body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
+        {% if logo_url %}
+        <img src="{{ logo_url }}" alt="{{ school_name }} Logo" style="height: 56px; max-width: 180px; margin-bottom: 12px;">
+        {% endif %}
+        <h1 style="color: white; margin: 0; font-size: 24px;">{{ email_heading|default:'Payment Received' }}</h1>
+        <p style="color: #e0e0e0; margin: 10px 0 0 0;">{{ school_name }}</p>
+    </div>
+    
+    <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; border: 1px solid #e0e0e0;">
+        <p>Dear <strong>{{ recipient_name }}</strong>,</p>
+        
+        <p>{{ email_intro|default:'We are pleased to confirm that your payment has been successfully received. Below are the payment details:' }}</p>
+        
+        <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #4CAF50;">
+            <h3 style="margin-top: 0; color: #333;">Payment Details</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">Receipt Number</td>
+                    <td style="padding: 8px 0; font-weight: bold; text-align: right;">{{ receipt_number }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">Fee Type</td>
+                    <td style="padding: 8px 0; font-weight: bold; text-align: right;">{{ fee_name }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">Amount Paid</td>
+                    <td style="padding: 8px 0; font-weight: bold; text-align: right; color: #4CAF50;">GH¢{{ amount_paid }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">Payment Method</td>
+                    <td style="padding: 8px 0; font-weight: bold; text-align: right;">{{ payment_method }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">Payment Date</td>
+                    <td style="padding: 8px 0; font-weight: bold; text-align: right;">{{ payment_date }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">Recorded By</td>
+                    <td style="padding: 8px 0; font-weight: bold; text-align: right;">{{ recorded_by }}</td>
+                </tr>
+            </table>
+        </div>
+        
+        <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2196F3;">
+            <h3 style="margin-top: 0; color: #333;">Fee Summary</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">Total Amount</td>
+                    <td style="padding: 8px 0; font-weight: bold; text-align: right;">GH¢{{ total_amount }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">Amount Paid to Date</td>
+                    <td style="padding: 8px 0; font-weight: bold; text-align: right;">GH¢{{ amount_paid_total }}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #666;">Balance Outstanding</td>
+                    <td style="padding: 8px 0; font-weight: bold; text-align: right;" {% if balance > 0 %}style="color: #f44336;"{% else %}style="color: #4CAF50;"{% endif %}>
+                        GH¢{{ balance }}
+                    </td>
+                </tr>
+            </table>
+        </div>
+        
+        {% if is_paid %}
+        <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0; text-align: center;">
+            <p style="margin: 0; color: #2e7d32; font-weight: bold; font-size: 18px;">✓ This fee has been fully paid!</p>
+        </div>
+        {% endif %}
+        
+        {% if notes %}
+        <p><strong>Notes:</strong> {{ notes }}</p>
+        {% endif %}
+        
+        <p style="margin-top: 30px;">Thank you for your prompt attention. If you have any questions, please contact the school administration.</p>
+        <div style="text-align:center; margin-top: 16px;">
+            <a href="{{ fee_link|default:frontend_url|add:'/dashboard/student/fees' }}" style="display:inline-block; background:#2563eb; color:#fff; text-decoration:none; padding:12px 22px; border-radius:8px; font-weight:600;">
+                View My Fees Dashboard
+            </a>
+        </div>
+        
+        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; text-align: center; color: #999; font-size: 12px;">
+            <p>This is an automated email. Please do not reply to this message.</p>
+            <p>&copy; {{ school_name }} {% now "Y" %}</p>
+        </div>
+    </div>
+</body>
+</html>
+

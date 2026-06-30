@@ -1,0 +1,3 @@
+- [ ] Add assessments by_class_subject_term endpoint in academics views
+- [ ] Register endpoint URL in academics urls
+- [ ] Run backend check for URL/view integrity

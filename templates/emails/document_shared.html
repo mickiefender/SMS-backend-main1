@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>New Document Shared - {{ school_name }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+    <tr>
+      <td style="padding:28px 14px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+          <tr>
+            <td style="background:linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%);padding:28px 24px;text-align:center;color:#fff;">
+              {% if logo_url %}
+              <img src="{{ logo_url }}" alt="{{ school_name }} Logo" style="height:56px;max-width:180px;margin-bottom:10px;">
+              {% endif %}
+              <h1 style="margin:0;font-size:24px;font-weight:700;">{{ school_name }}</h1>
+              <p style="margin:8px 0 0 0;opacity:0.95;">Class Document Notification</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 24px;">
+              <h2 style="margin:0 0 12px 0;font-size:22px;color:#0f172a;">A New Document Has Been Shared</h2>
+              <p style="margin:0 0 16px 0;color:#334155;font-size:15px;line-height:1.7;">
+                A teacher has shared a new learning resource with your class. Please review the document details below and access it through your student portal.
+              </p>
+
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;">
+                <p style="margin:0 0 8px 0;color:#64748b;font-size:13px;text-transform:uppercase;letter-spacing:.5px;">Document Title</p>
+                <p style="margin:0 0 14px 0;color:#0f172a;font-size:18px;font-weight:700;">{{ document_title }}</p>
+
+                <p style="margin:0 0 6px 0;color:#64748b;">Type: <strong style="color:#0f172a;">{{ document_type }}</strong></p>
+                <p style="margin:0 0 6px 0;color:#64748b;">Subject: <strong style="color:#0f172a;">{{ subject_name }}</strong></p>
+                <p style="margin:0 0 6px 0;color:#64748b;">Class: <strong style="color:#0f172a;">{{ class_name }}</strong></p>
+                <p style="margin:0;color:#64748b;">Shared By: <strong style="color:#0f172a;">{{ uploaded_by }}</strong></p>
+              </div>
+
+              {% if document_description %}
+              <div style="margin-top:16px;padding:14px;border-left:4px solid #2563eb;background:#eff6ff;border-radius:8px;color:#1e3a8a;">
+                {{ document_description }}
+              </div>
+              {% endif %}
+
+              <div style="text-align:center;margin-top:22px;">
+                <a href="{{ documents_link|default:frontend_url|add:'/dashboard/student/documents' }}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;">
+                  Open Class Documents
+                </a>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 24px;background:#f8fafc;color:#64748b;font-size:12px;text-align:center;">
+              <p style="margin:0;">This is an automated message from {{ school_name }}.</p>
+              <p style="margin:6px 0 0 0;">&copy; {% now "Y" %} {{ school_name }}. All rights reserved.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
