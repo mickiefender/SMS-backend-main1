@@ -14,10 +14,17 @@ class NewsViewSet(viewsets.ModelViewSet):
     CRUD for school news.
     - School admins create/update/delete news for their school.
     - Banner upload endpoint: POST /api/schools/news/{id}/upload_banner/
+    - Banners endpoint: GET /api/schools/news/banners/ (any authenticated user)
     """
     serializer_class = NewsSerializer
     permission_classes = [permissions.IsAuthenticated, IsSchoolAdminOrHigher]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        """Allow any authenticated user to access the banners endpoint."""
+        if self.action == 'banners':
+            return [permissions.IsAuthenticated()]
+        return super().get_permissions()
 
     def get_serializer_class(self):
         if self.action == 'list':
