@@ -21,6 +21,7 @@ urlpatterns = [
     path('api/payments/', include('apps.payments.urls')),
     path('api/students/', include('apps.students.urls')),
     path('api/messaging/', include('apps.messaging.urls')),
+    path('api/feed/', include('apps.feed.urls')),
     # Student notifications API
     path('api/', include(router.urls)),
 ]

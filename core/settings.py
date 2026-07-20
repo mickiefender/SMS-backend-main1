@@ -38,6 +38,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'django_filters',
+    "django.contrib.postgres",
+
     
     # Local apps
     'apps.users',
@@ -50,6 +52,7 @@ INSTALLED_APPS = [
     'apps.students',
     'apps.storage',
     'apps.messaging',
+    'apps.feed',
 ]
 
 MIDDLEWARE = [
@@ -289,3 +292,19 @@ PAYSTACK_CURRENCY = 'GHC'
 
 # Frontend URL (for payment callbacks)
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+
+# Alara Learning Feed settings
+FEED_CACHE_TIMEOUT = int(os.environ.get('FEED_CACHE_TIMEOUT', '300'))
+FEED_PAGE_SIZE = int(os.environ.get('FEED_PAGE_SIZE', '12'))
+
+# Supabase Storage buckets used by the Learning Feed
+FEED_STORAGE_BUCKETS = {
+    'videos': 'lesson-videos',
+    'images': 'lesson-images',
+    'pdfs': 'lesson-pdfs',
+    'thumbnails': 'lesson-thumbnails',
+    'audio': 'lesson-audio',
+    'assignments': 'lesson-assignments',
+    'quizzes': 'lesson-quizzes',
+    'teacher_avatars': 'teacher-avatars',
+}
