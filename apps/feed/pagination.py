@@ -3,17 +3,17 @@ from rest_framework.pagination import CursorPagination
 
 class FeedCursorPagination(CursorPagination):
     """
-    Cursor pagination optimized for infinite scrolling feeds.
-    Default ordering is by `-published_at` (newest first).
+    Cursor pagination optimized for chronological and ranked feeds.
+    Views override ordering when the request uses recommendations.
     """
     page_size = 12
-    ordering = '-published_at'
+    ordering = ('-published_at', '-pk')
     cursor_query_param = 'cursor'
 
 
 class TrendingCursorPagination(CursorPagination):
     page_size = 12
-    ordering = '-trending_score'
+    ordering = ('-trending_score', '-published_at', '-pk')
     cursor_query_param = 'cursor'
 
 

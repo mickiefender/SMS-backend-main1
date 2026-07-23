@@ -14,7 +14,7 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import List, Optional
 
-from django.db.models import Case, F, Q, Value, When
+from django.db.models import Case, DecimalField, ExpressionWrapper, F, Q, Value, When
 from django.utils import timezone
 
 from apps.feed import models
@@ -48,7 +48,12 @@ class RecommendationService:
             qs = qs.filter(school_id=school_id)
 
         if strategy == 'trending':
-            return qs.order_by('-trending_score', '-published_at')
+            qs = qs.annotate(
+                engagement_score=RecommendationService._engagement_score()
+            )
+            return qs.order_by(
+                '-engagement_score', '-trending_score', '-published_at', '-pk'
+            )
         if strategy == 'latest':
             return qs.order_by('-published_at')
         if strategy == 'most_viewed':
@@ -80,7 +85,24 @@ class RecommendationService:
         if strategy == 'editor_picks':
             return qs.filter(extra_metadata__editor_pick=True).order_by('-published_at')
 
-        return qs.order_by('-trending_score')
+        return qs.annotate(
+            engagement_score=RecommendationService._engagement_score()
+        ).order_by('-engagement_score', '-trending_score', '-published_at', '-pk')
+
+    @staticmethod
+    def _engagement_score():
+        """Calculate a live fallback while scheduled trending scores catch up."""
+        return ExpressionWrapper(
+            F('view_count')
+            + F('unique_view_count') * Decimal('2.0')
+            + F('like_count') * Decimal('4.0')
+            + F('save_count') * Decimal('5.0')
+            + F('comment_count') * Decimal('3.0')
+            + F('share_count') * Decimal('6.0')
+            + F('completion_rate') * Decimal('10.0')
+            + F('avg_watch_seconds') * Decimal('0.1'),
+            output_field=DecimalField(max_digits=18, decimal_places=6),
+        )
 
     @staticmethod
     def get_recommendations_for_user(
@@ -142,6 +164,7 @@ class RecommendationService:
 
         # Scoring annotations
         candidates = candidates.annotate(
+            engagement_score=RecommendationService._engagement_score(),
             pref_subject_match=Case(
                 When(subject_id__in=subject_ids, then=Value(20)),
                 default=Value(0),
@@ -168,6 +191,7 @@ class RecommendationService:
         candidates = candidates.annotate(
             rec_score=(
                 F('trending_score') * Decimal('0.5') +
+                F('engagement_score') * Decimal('0.5') +
                 F('quality_score') * Decimal('0.3') +
                 F('completion_rate') * Decimal('0.2') +
                 F('pref_subject_match') +

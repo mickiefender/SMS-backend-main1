@@ -179,7 +179,17 @@ class FeedView(APIView):
         strategy = request.query_params.get('strategy', 'trending')
         school_id = request.query_params.get('school_id')
         qs = FeedService.get_feed(request.user, strategy=strategy, school_id=school_id)
-        paginator = self.pagination_class()
+        if strategy in ('recommended', 'personalized'):
+            paginator = self.pagination_class()
+            paginator.ordering = (
+                ('-rec_score', '-published_at', '-pk')
+                if request.user and request.user.is_authenticated
+                else ('-trending_score', '-published_at', '-pk')
+            )
+        elif strategy == 'trending':
+            paginator = TrendingCursorPagination()
+        else:
+            paginator = self.pagination_class()
         page = paginator.paginate_queryset(qs, request, view=self)
         serializer = serializers.LessonListSerializer(
             page, many=True, context={'request': request}
@@ -198,6 +208,7 @@ class RecommendedFeedView(APIView):
             request.user, strategy='personalized', school_id=school_id
         )
         paginator = self.pagination_class()
+        paginator.ordering = ('-rec_score', '-published_at', '-pk')
         page = paginator.paginate_queryset(qs, request, view=self)
         serializer = serializers.LessonListSerializer(
             page, many=True, context={'request': request}
@@ -282,10 +293,19 @@ class TeacherFeedView(APIView):
         )
         paginated_response = paginator.get_paginated_response(lesson_serializer.data)
         lesson_results = paginated_response.data.get('results', [])
+        profile_picture_url = None
+        try:
+            profile_pic = getattr(data['profile'].user, 'profile_picture', None)
+            if profile_pic:
+                profile_picture_url = profile_pic.display_url
+        except Exception:
+            pass
+
         response_data = {
             'teacher': {
                 'id': data['profile'].user_id,
                 'name': data['profile'].user.get_full_name(),
+                'profile_picture': profile_picture_url,
                 'bio': data['profile'].bio,
                 'specialization': data['profile'].specialization,
                 'follower_count': data['follower_count'],

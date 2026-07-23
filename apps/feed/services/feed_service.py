@@ -28,14 +28,19 @@ class FeedService:
     @staticmethod
     def get_feed(user, strategy: str = 'trending', school_id: Optional[int] = None):
         """Public feed endpoint used by both guests and authenticated users."""
+        # Ranked querysets contain a user-specific rec_score annotation. IDs
+        # alone cannot restore that ordering on a cache hit.
+        cache_ranked_feed = not (
+            user and user.is_authenticated and strategy in ('recommended', 'personalized')
+        )
         cache_key = None
-        if user and user.is_authenticated:
+        if cache_ranked_feed and user and user.is_authenticated:
             cache_key = RecommendationService.cache_key(user, strategy, school_id)
-        else:
+        elif cache_ranked_feed:
             from apps.feed.utils import hash_ip
             cache_key = f"feed:guest:{strategy}:{school_id or 'global'}:anon"
 
-        cached = cache.get(cache_key)
+        cached = cache.get(cache_key) if cache_key else None
         if cached is not None:
             return models.FeedLesson.objects.filter(id__in=cached).order_by(
                 Case(*[When(id=pk, then=Value(idx)) for idx, pk in enumerate(cached)])
@@ -48,7 +53,7 @@ class FeedService:
 
         # Cache only IDs to avoid serialization cost
         ids = list(qs.values_list('id', flat=True)[:200])
-        if ids:
+        if ids and cache_key:
             cache.set(cache_key, ids, timeout=FeedService.CACHE_TIMEOUT)
         return qs
 

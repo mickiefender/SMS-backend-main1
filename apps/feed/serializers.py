@@ -49,6 +49,7 @@ class LessonResourceSerializer(serializers.ModelSerializer):
 
 class LessonListSerializer(serializers.ModelSerializer):
     teacher_name = serializers.CharField(source='teacher.get_full_name', read_only=True)
+    teacher_profile_picture = serializers.SerializerMethodField()
     school_name = serializers.CharField(source='school.name', read_only=True)
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     level_name = serializers.CharField(source='level.name', read_only=True)
@@ -77,6 +78,7 @@ class LessonListSerializer(serializers.ModelSerializer):
             'comment_count', 'share_count', 'download_count',
             'completion_rate', 'avg_watch_seconds', 'trending_score',
             'tags', 'primary_resource', 'is_liked', 'is_saved',
+            'teacher_profile_picture',
             'is_following_teacher', 'published_at', 'created_at',
         ]
 
@@ -131,6 +133,16 @@ class LessonListSerializer(serializers.ModelSerializer):
         if not user or not user.is_authenticated:
             return False
         return models.FeedSave.objects.filter(user=user, lesson=obj).exists()
+
+    def get_teacher_profile_picture(self, obj):
+        """Return the teacher's profile picture URL, or None."""
+        try:
+            profile_pic = getattr(obj.teacher, 'profile_picture', None)
+            if profile_pic:
+                return profile_pic.display_url
+        except Exception:
+            pass
+        return None
 
     def get_is_following_teacher(self, obj):
         user = self.context.get('request').user if self.context.get('request') else None

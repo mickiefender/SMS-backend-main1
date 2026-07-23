@@ -118,7 +118,21 @@ class LessonService:
 
         # Ensure analytics row exists.
         models.LessonAnalytics.objects.get_or_create(lesson=lesson)
+        LessonService.update_quality_score(lesson)
         return lesson
+
+    @staticmethod
+    def update_quality_score(lesson: models.FeedLesson):
+        """Score basic content completeness until user feedback is available."""
+        score = 0
+        score += 20 if lesson.title.strip() else 0
+        score += 20 if lesson.description.strip() else 0
+        score += 15 if lesson.subject_id else 0
+        score += 15 if lesson.level_id else 0
+        score += 10 if lesson.class_obj_id else 0
+        score += 20 if lesson.resources.exists() else 0
+        lesson.quality_score = Decimal(score)
+        lesson.save(update_fields=['quality_score'])
 
     @staticmethod
     def update_lesson(lesson, validated_data):

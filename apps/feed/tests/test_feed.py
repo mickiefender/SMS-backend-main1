@@ -1,8 +1,10 @@
 """
 Unit tests for the Alara Learning Feed.
 """
+from datetime import timedelta
 from decimal import Decimal
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from django.urls import reverse
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase, APIClient
@@ -13,6 +15,7 @@ from apps.feed.services.lesson_service import LessonService
 from apps.feed.services.recommendation_service import RecommendationService
 from apps.feed.services.analytics_service import AnalyticsService
 from apps.feed.services.moderation_service import ModerationService
+from apps.feed.pagination import FeedCursorPagination
 from apps.schools.models import School
 
 User = get_user_model()
@@ -121,6 +124,48 @@ class FeedServiceTest(TestCase):
         qs = RecommendationService.get_recommendations_for_user(self.student)
         ids = list(qs.values_list('id', flat=True))
         self.assertIn(self.lesson.id, ids)
+
+    def test_personalized_recommendations_use_rank_score_before_publish_time(self):
+        older_high_value = models.FeedLesson.objects.create(
+            title='Highly Rated Older Lesson',
+            teacher=self.teacher,
+            school=self.school,
+            level=self.level,
+            subject=self.subject,
+            visibility='public',
+            status='approved',
+            published_at=timezone.now() - timedelta(days=2),
+            trending_score=Decimal('20.00'),
+        )
+        newer_low_value = models.FeedLesson.objects.create(
+            title='Newer Low Value Lesson',
+            teacher=self.teacher,
+            school=self.school,
+            level=self.level,
+            subject=self.subject,
+            visibility='public',
+            status='approved',
+            published_at=timezone.now() - timedelta(days=1),
+            trending_score=Decimal('1.00'),
+        )
+
+        ids = list(
+            RecommendationService.get_recommendations_for_user(
+                self.student,
+                strategy='personalized',
+            ).values_list('id', flat=True)
+        )
+
+        self.assertLess(ids.index(older_high_value.id), ids.index(newer_low_value.id))
+
+    def test_feed_pagination_preserves_recommendation_ordering(self):
+        paginator = FeedCursorPagination()
+        paginator.ordering = ('-rec_score', '-published_at', '-pk')
+
+        self.assertEqual(
+            paginator.ordering,
+            ('-rec_score', '-published_at', '-pk'),
+        )
 
     def test_analytics_view_increments(self):
         AnalyticsService.track_view(self.lesson, self.student)

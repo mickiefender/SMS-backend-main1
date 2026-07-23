@@ -10,6 +10,13 @@ from apps.feed import models
 
 class AnalyticsService:
     @staticmethod
+    def _increment_lesson_counter(lesson, field_name: str, amount: int = 1):
+        """Keep denormalized feed counters in sync with analytics events."""
+        setattr(lesson, field_name, F(field_name) + amount)
+        lesson.save(update_fields=[field_name])
+        lesson.refresh_from_db(fields=[field_name])
+
+    @staticmethod
     def _get_or_create_analytics(lesson: models.FeedLesson) -> models.LessonAnalytics:
         obj, _ = models.LessonAnalytics.objects.get_or_create(lesson=lesson)
         return obj
@@ -39,6 +46,7 @@ class AnalyticsService:
 
     @staticmethod
     def track_like(lesson: models.FeedLesson):
+        AnalyticsService._increment_lesson_counter(lesson, 'like_count')
         analytics = AnalyticsService._get_or_create_analytics(lesson)
         analytics.likes = F('likes') + 1
         analytics.save(update_fields=['likes'])
@@ -46,12 +54,14 @@ class AnalyticsService:
 
     @staticmethod
     def track_unlike(lesson: models.FeedLesson):
+        AnalyticsService._increment_lesson_counter(lesson, 'like_count', -1)
         analytics = AnalyticsService._get_or_create_analytics(lesson)
         analytics.likes = F('likes') - 1
         analytics.save(update_fields=['likes'])
 
     @staticmethod
     def track_save(lesson: models.FeedLesson):
+        AnalyticsService._increment_lesson_counter(lesson, 'save_count')
         analytics = AnalyticsService._get_or_create_analytics(lesson)
         analytics.saves = F('saves') + 1
         analytics.save(update_fields=['saves'])
@@ -59,12 +69,14 @@ class AnalyticsService:
 
     @staticmethod
     def track_unsave(lesson: models.FeedLesson):
+        AnalyticsService._increment_lesson_counter(lesson, 'save_count', -1)
         analytics = AnalyticsService._get_or_create_analytics(lesson)
         analytics.saves = F('saves') - 1
         analytics.save(update_fields=['saves'])
 
     @staticmethod
     def track_comment(lesson: models.FeedLesson):
+        AnalyticsService._increment_lesson_counter(lesson, 'comment_count')
         analytics = AnalyticsService._get_or_create_analytics(lesson)
         analytics.comments = F('comments') + 1
         analytics.save(update_fields=['comments'])
@@ -72,8 +84,7 @@ class AnalyticsService:
 
     @staticmethod
     def track_share(lesson: models.FeedLesson):
-        lesson.share_count = F('share_count') + 1
-        lesson.save(update_fields=['share_count'])
+        AnalyticsService._increment_lesson_counter(lesson, 'share_count')
         analytics = AnalyticsService._get_or_create_analytics(lesson)
         analytics.shares = F('shares') + 1
         analytics.save(update_fields=['shares'])
@@ -81,8 +92,7 @@ class AnalyticsService:
 
     @staticmethod
     def track_download(lesson: models.FeedLesson):
-        lesson.download_count = F('download_count') + 1
-        lesson.save(update_fields=['download_count'])
+        AnalyticsService._increment_lesson_counter(lesson, 'download_count')
         analytics = AnalyticsService._get_or_create_analytics(lesson)
         analytics.downloads = F('downloads') + 1
         analytics.save(update_fields=['downloads'])
