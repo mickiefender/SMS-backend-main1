@@ -76,3 +76,10 @@ class FeedNotificationAdmin(admin.ModelAdmin):
 @admin.register(models.LessonAnalytics)
 class LessonAnalyticsAdmin(admin.ModelAdmin):
     list_display = ['lesson', 'views', 'unique_views', 'completion_rate', 'updated_at']
+
+
+@admin.register(models.GuestLearner)
+class GuestLearnerAdmin(admin.ModelAdmin):
+    list_display = ['device_id', 'name', 'level', 'class_obj', 'onboarding_completed_at', 'created_at']
+    list_filter = ['level', 'class_obj']
+    search_fields = ['name', 'device_id']

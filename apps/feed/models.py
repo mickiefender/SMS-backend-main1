@@ -176,6 +176,14 @@ class FeedLesson(models.Model):
     poster_url = models.URLField(max_length=1000, blank=True)
     extra_metadata = models.JSONField(default=dict, blank=True)
 
+    # ── Cloudflare Stream fields ─────────────────────────────────
+    # Replaces the old Supabase video_url / LessonResource-based video.
+    # When a video is uploaded to Cloudflare Stream, these fields are populated.
+    cloudflare_video_uid = models.CharField(max_length=255, blank=True, db_index=True)
+    cloudflare_playback_url = models.URLField(max_length=1000, blank=True)
+    cloudflare_thumbnail_url = models.URLField(max_length=1000, blank=True)
+    video_duration = models.FloatField(default=0.0)
+
     # Denormalized counters (maintained by DB triggers)
     view_count = models.BigIntegerField(default=0)
     unique_view_count = models.BigIntegerField(default=0)
@@ -515,6 +523,63 @@ class RecommendationCache(models.Model):
 
     def __str__(self):
         return f"RecCache({self.user_id}:{self.cache_key})"
+
+
+# ---------------------------------------------------------------------------
+# Guest Learner
+# ---------------------------------------------------------------------------
+
+class GuestLearner(models.Model):
+    """
+    Stores a guest learner's profile keyed by a client-generated device UUID.
+
+    When a user skips login, they provide:
+      - device_id (UUID v4, generated client-side)
+      - name
+      - academic level, class, and subject interests
+
+    Guest likes and feed activity can be tracked against this record.
+    """
+    device_id = models.UUIDField(
+        primary_key=True,
+        help_text="Client-generated UUID v4 stored in FlutterSecureStorage",
+    )
+    name = models.CharField(max_length=255)
+    level = models.ForeignKey(
+        'FeedAcademicLevel',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='guest_learners',
+    )
+    class_obj = models.ForeignKey(
+        'FeedAcademicClass',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='guest_learners',
+    )
+    subjects = models.ManyToManyField(
+        'FeedSubject',
+        blank=True,
+        related_name='guest_learners',
+    )
+    subject_ids = models.JSONField(default=list, blank=True)
+
+    # Engagement
+    liked_lesson_ids = models.JSONField(default=list, blank=True)
+    onboarding_completed_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'feed_guestlearner'
+        verbose_name = 'Guest Learner'
+        verbose_name_plural = 'Guest Learners'
+
+    def __str__(self):
+        return f"Guest({self.device_id}: {self.name})"
 
 
 # ---------------------------------------------------------------------------

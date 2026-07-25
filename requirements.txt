@@ -3,9 +3,9 @@ djangorestframework==3.14.0
 djangorestframework-simplejwt==5.3.1
 django-cors-headers==4.3.1
 django-filter==23.5
-psycopg2-binary==2.9.9
+psycopg2-binary>=2.9.10
 python-decouple==3.8
-Pillow==10.1.0
+Pillow>=11.3.0
 gunicorn==21.2.0
 daphne==4.0.0
 channels==4.0.0
@@ -23,7 +23,7 @@ supabase>=2.3.0
 PyPDF2==3.0.1
 python-docx==1.1.0
 requests==2.31.0
-pymupdf==1.23.8
+PyMuPDF>=1.26.0
 pytesseract==0.3.10
 python-magic==0.4.27
 python-dotenv==1.0.0
@@ -32,3 +32,4 @@ resend>=0.7.0
 # Alara Learning Feed extras
 ffmpeg-python>=0.2.0
 mutagen>=1.47.0
+PyJWT>=2.8.0

@@ -173,6 +173,11 @@ SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
 SUPABASE_STORAGE_BUCKET = os.environ.get('SUPABASE_STORAGE_BUCKET', 'school-documents')
 
+# Cloudflare Stream Configuration
+CLOUDFLARE_STREAM_API_TOKEN = os.environ.get('CLOUDFLARE_STREAM_API_TOKEN', '')
+CLOUDFLARE_STREAM_ACCOUNT_ID = os.environ.get('CLOUDFLARE_STREAM_ACCOUNT_ID', '')
+CLOUDFLARE_STREAM_SIGNING_KEY = os.environ.get('CLOUDFLARE_STREAM_SIGNING_KEY', '')
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

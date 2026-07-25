@@ -56,14 +56,16 @@ class LessonListSerializer(serializers.ModelSerializer):
     class_name = serializers.CharField(source='class_obj.name', read_only=True)
     tags = FeedTagSerializer(many=True, read_only=True)
     primary_resource = serializers.SerializerMethodField()
-    video_url = serializers.SerializerMethodField()
-    media_url = serializers.SerializerMethodField()
-    media_type = serializers.SerializerMethodField()
-    thumbnail_url = serializers.SerializerMethodField()
-    poster_url = serializers.SerializerMethodField()
     is_liked = serializers.SerializerMethodField()
     is_saved = serializers.SerializerMethodField()
     is_following_teacher = serializers.SerializerMethodField()
+
+    # ── Cloudflare Stream fields (replace old video_url / media_url / poster_url) ──
+    video_url = serializers.SerializerMethodField()
+    video_uid = serializers.CharField(source='cloudflare_video_uid', read_only=True)
+    playback_url = serializers.CharField(source='cloudflare_playback_url', read_only=True)
+    cloudflare_thumbnail_url = serializers.URLField(read_only=True)
+    video_duration = serializers.FloatField(read_only=True)
 
     class Meta:
         model = models.FeedLesson
@@ -73,7 +75,8 @@ class LessonListSerializer(serializers.ModelSerializer):
             'class_obj_id', 'class_name', 'subject_id', 'subject_name',
             'visibility', 'status', 'verification_status',
             'duration_seconds', 'thumbnail_url', 'poster_url',
-            'video_url', 'media_url', 'media_type',
+            'video_url', 'video_uid', 'playback_url',
+            'cloudflare_thumbnail_url', 'video_duration',
             'view_count', 'unique_view_count', 'like_count', 'save_count',
             'comment_count', 'share_count', 'download_count',
             'completion_rate', 'avg_watch_seconds', 'trending_score',
@@ -90,37 +93,15 @@ class LessonListSerializer(serializers.ModelSerializer):
         return LessonResourceSerializer(resource).data if resource else None
 
     def get_video_url(self, obj):
+        """
+        Returns the Cloudflare Stream HLS playback URL if available.
+        Falls back to the old resource-based video URL for backwards compatibility
+        during migration.
+        """
+        if obj.cloudflare_playback_url:
+            return obj.cloudflare_playback_url
         resource = self._get_primary_resource(obj)
         return resource.public_url if resource and resource.resource_type == 'video' else None
-
-    def get_media_url(self, obj):
-        resource = self._get_primary_resource(obj)
-        return resource.public_url if resource else None
-
-    def get_media_type(self, obj):
-        resource = self._get_primary_resource(obj)
-        return resource.resource_type if resource else None
-
-    def get_thumbnail_url(self, obj):
-        # Try explicit thumbnail_url first
-        if obj.thumbnail_url:
-            return obj.thumbnail_url
-        # Fall back to poster_url only if it's an image (never use video URLs as thumbnails)
-        if obj.poster_url and not obj.poster_url.endswith(('.mp4', '.mov', '.avi', '.mkv', '.webm')):
-            return obj.poster_url
-        # Fall back to image resource
-        resource = self._get_primary_resource(obj)
-        if resource and resource.resource_type == 'image':
-            return resource.public_url
-        return None
-
-    def get_poster_url(self, obj):
-        if obj.poster_url:
-            return obj.poster_url
-        resource = self._get_primary_resource(obj)
-        if resource and resource.resource_type == 'video':
-            return resource.public_url
-        return None
 
     def get_is_liked(self, obj):
         user = self.context.get('request').user if self.context.get('request') else None
@@ -135,7 +116,6 @@ class LessonListSerializer(serializers.ModelSerializer):
         return models.FeedSave.objects.filter(user=user, lesson=obj).exists()
 
     def get_teacher_profile_picture(self, obj):
-        """Return the teacher's profile picture URL, or None."""
         try:
             profile_pic = getattr(obj.teacher, 'profile_picture', None)
             if profile_pic:
@@ -312,3 +292,20 @@ class WatchHistorySerializer(serializers.ModelSerializer):
 class WatchEventSerializer(serializers.Serializer):
     watch_seconds = serializers.IntegerField(min_value=0)
     resume_position = serializers.IntegerField(min_value=0, default=0)
+
+
+# =============================================================================
+# Guest Learner Serializer
+# =============================================================================
+
+class GuestLearnerSerializer(serializers.ModelSerializer):
+    """Serializer for GuestLearner model (DB-persisted guest profiles)."""
+
+    class Meta:
+        model = models.GuestLearner
+        fields = [
+            'device_id', 'name', 'level_id', 'class_obj_id',
+            'subject_ids', 'liked_lesson_ids',
+            'onboarding_completed_at', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['onboarding_completed_at', 'created_at', 'updated_at']

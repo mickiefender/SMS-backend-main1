@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from apps.feed import views
+from apps.feed import views, guest_views
 
 router = DefaultRouter()
 router.register(r'lesson', views.FeedLessonViewSet, basename='feed-lesson')
@@ -40,5 +40,13 @@ urlpatterns = [
     path('reference/classes/', views.ReferenceClassesView.as_view(), name='feed-classes'),
     path('reference/subjects/', views.ReferenceSubjectsView.as_view(), name='feed-subjects'),
     path('reference/tags/', views.ReferenceTagsView.as_view(), name='feed-tags'),
+
+    # Guest (unauthenticated learner) endpoints
+    path('guest/onboard/', guest_views.GuestOnboardView.as_view(), name='guest-onboard'),
+    path('guest/profile/', guest_views.GuestProfileView.as_view(), name='guest-profile'),
+    path('guest/feed/', guest_views.GuestFeedView.as_view(), name='guest-feed'),
+    path('guest/like/', guest_views.GuestLikeView.as_view(), name='guest-like'),
+
     path('', include(router.urls)),
 ]
+
