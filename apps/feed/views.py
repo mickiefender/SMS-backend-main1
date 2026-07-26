@@ -28,6 +28,8 @@ from apps.feed.services.analytics_service import AnalyticsService
 from apps.feed.services.notification_service import NotificationService
 from apps.feed.services.moderation_service import ModerationService
 from apps.feed.services.upload_service import UploadService
+from apps.feed.models_v2 import InteractionType as InteractionTypeEnum
+from apps.feed.services.interest_scoring_service import InterestScoringService
 
 
 class FeedLessonViewSet(viewsets.ModelViewSet):
@@ -118,9 +120,17 @@ class FeedLessonViewSet(viewsets.ModelViewSet):
         if like_qs.exists():
             like_qs.delete()
             AnalyticsService.track_unlike(lesson)
+            InterestScoringService.record_interaction(
+                user=user, lesson_id=lesson.id,
+                interaction_type=InteractionTypeEnum.UNLIKE,
+            )
             return Response({'liked': False, 'like_count': lesson.like_count})
         models.FeedLike.objects.create(user=user, lesson=lesson)
         AnalyticsService.track_like(lesson)
+        InterestScoringService.record_interaction(
+            user=user, lesson_id=lesson.id,
+            interaction_type=InteractionTypeEnum.LIKE,
+        )
         return Response({'liked': True, 'like_count': lesson.like_count})
 
     @action(detail=True, methods=['post'])
@@ -131,6 +141,10 @@ class FeedLessonViewSet(viewsets.ModelViewSet):
         if save_qs.exists():
             save_qs.delete()
             AnalyticsService.track_unsave(lesson)
+            InterestScoringService.record_interaction(
+                user=user, lesson_id=lesson.id,
+                interaction_type=InteractionTypeEnum.UNSAVE,
+            )
             return Response({'saved': False, 'save_count': lesson.save_count})
         models.FeedSave.objects.create(
             user=user,
@@ -138,6 +152,10 @@ class FeedLessonViewSet(viewsets.ModelViewSet):
             offline_download_metadata=request.data.get('offline_metadata')
         )
         AnalyticsService.track_save(lesson)
+        InterestScoringService.record_interaction(
+            user=user, lesson_id=lesson.id,
+            interaction_type=InteractionTypeEnum.SAVE,
+        )
         return Response({'saved': True, 'save_count': lesson.save_count})
 
     @action(detail=True, methods=['post'])
@@ -151,12 +169,33 @@ class FeedLessonViewSet(viewsets.ModelViewSet):
             watch_seconds=serializer.validated_data['watch_seconds'],
             resume_position=serializer.validated_data.get('resume_position', 0),
         )
+        # Determine if this is a completion or progress update
+        watch_seconds = serializer.validated_data['watch_seconds']
+        duration = lesson.duration_seconds or lesson.video_duration or 0
+        completion_pct = (watch_seconds / duration * 100) if duration > 0 else 0
+        if completion_pct >= 90:
+            interaction_type = InteractionTypeEnum.WATCH_COMPLETE
+        else:
+            interaction_type = InteractionTypeEnum.WATCH_UPDATE
+        InterestScoringService.record_interaction(
+            user=request.user, lesson_id=lesson.id,
+            interaction_type=interaction_type,
+            metadata={
+                'watch_seconds': watch_seconds,
+                'duration_seconds': duration,
+                'completion_percentage': round(completion_pct, 1),
+            },
+        )
         return Response(serializers.WatchHistorySerializer(history).data)
 
     @action(detail=True, methods=['post'])
     def share(self, request, pk=None):
         lesson = self.get_object()
         AnalyticsService.track_share(lesson)
+        InterestScoringService.record_interaction(
+            user=request.user, lesson_id=lesson.id,
+            interaction_type=InteractionTypeEnum.SHARE,
+        )
         return Response({'share_count': lesson.share_count})
 
     @action(detail=True, methods=['post'])
@@ -330,10 +369,20 @@ class TeacherFollowView(APIView):
         )
         if created:
             NotificationService.notify_new_follower(relation)
+            InterestScoringService.record_interaction(
+                user=request.user, lesson_id=None,
+                interaction_type=InteractionTypeEnum.FOLLOW_TEACHER,
+                metadata={'teacher_id': pk},
+            )
         return Response({'following': True})
 
     def delete(self, request, pk):
         models.TeacherFollower.objects.filter(user=request.user, teacher_id=pk).delete()
+        InterestScoringService.record_interaction(
+            user=request.user, lesson_id=None,
+            interaction_type=InteractionTypeEnum.UNFOLLOW_TEACHER,
+            metadata={'teacher_id': pk},
+        )
         return Response({'following': False})
 
 
@@ -415,6 +464,16 @@ class LearningProfileView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+
+        # Seed interest scores from updated preferences
+        subject_ids = serializer.instance.preferred_subject_ids or []
+        InterestScoringService.seed_from_onboarding(
+            user=request.user,
+            subject_ids=subject_ids,
+            level_id=serializer.instance.preferred_level_id,
+            class_id=serializer.instance.preferred_class_id,
+        )
+
         RecommendationService.invalidate_user_cache(request.user)
         return Response(serializer.data)
 

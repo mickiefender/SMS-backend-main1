@@ -196,6 +196,52 @@ def clear_stale_feed_caches():
         logger.warning('Failed to clear stale caches: %s', exc)
 
 
+@shared_task
+def decay_interest_scores():
+    """
+    Apply daily time-based decay to all user interest scores.
+
+    Run daily via Celery Beat:
+        celery -A core beat --scheduler django_celery_beat.schedulers:DatabaseScheduler
+
+    Interest scores decay by 5% per day (or 2% for onboarding preferences)
+    if not reinforced by new interactions.
+    """
+    from apps.feed.models_v2 import UserInterestScore
+    from apps.feed.services.interest_scoring_service import InterestScoringService
+    from django.utils import timezone
+
+    now = timezone.now()
+    batch_size = 1000
+    processed = 0
+
+    # Process all users with interest scores
+    user_ids = UserInterestScore.objects.filter(
+        user__isnull=False
+    ).values_list('user_id', flat=True).distinct()
+
+    for uid in user_ids:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        try:
+            user = User.objects.get(pk=uid)
+            InterestScoringService.apply_decay(user=user)
+            processed += 1
+        except User.DoesNotExist:
+            pass
+
+    # Process guest users
+    guest_device_ids = UserInterestScore.objects.filter(
+        user__isnull=True
+    ).exclude(guest_device_id='').values_list('guest_device_id', flat=True).distinct()
+
+    for gid in guest_device_ids:
+        InterestScoringService.apply_decay(guest_device_id=gid)
+        processed += 1
+
+    logger.info("Applied interest score decay to %d users/guests", processed)
+
+
 @shared_task(bind=True, max_retries=10, default_retry_delay=60)
 def finalize_cloudflare_video_upload(self, resource_id: int):
     """

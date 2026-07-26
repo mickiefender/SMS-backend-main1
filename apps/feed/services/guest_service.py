@@ -8,7 +8,7 @@ and activity survive across sessions.
 Requires the feed_guestlearner and feed_guestlike tables (see sql/guest_learner_schema.sql).
 """
 from typing import List, Optional
-from datetime import timezone
+from decimal import Decimal
 from django.utils import timezone as django_timezone
 
 from apps.feed.models import (
@@ -16,6 +16,7 @@ from apps.feed.models import (
     FeedLesson,
 )
 from apps.feed.services.recommendation_service import RecommendationService
+from apps.feed.services.interest_scoring_service import InterestScoringService
 
 
 # We reference the GuestLike model dynamically because it's defined in the SQL

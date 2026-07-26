@@ -176,6 +176,26 @@ class FeedLesson(models.Model):
     poster_url = models.URLField(max_length=1000, blank=True)
     extra_metadata = models.JSONField(default=dict, blank=True)
 
+    # New lesson metadata foreign keys
+    content_type = models.ForeignKey(
+        'FeedContentType', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='lessons'
+    )
+    difficulty_level = models.ForeignKey(
+        'FeedDifficultyLevel', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='lessons'
+    )
+    curriculum = models.ForeignKey(
+        'FeedCurriculum', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='lessons'
+    )
+    learning_objective = models.ForeignKey(
+        'FeedLearningObjective', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='lessons'
+    )
+    keywords = models.JSONField(default=list, blank=True)
+    hashtags = models.JSONField(default=list, blank=True)
+
     # ── Cloudflare Stream fields ─────────────────────────────────
     # Replaces the old Supabase video_url / LessonResource-based video.
     # When a video is uploaded to Cloudflare Stream, these fields are populated.
@@ -224,6 +244,9 @@ class FeedLesson(models.Model):
             GinIndex(fields=['search_vector']),
             GinIndex(fields=['title'], name='feedlesson_title_gin', opclasses=['gin_trgm_ops']),
             GinIndex(fields=['topic'], name='feedlesson_topic_gin', opclasses=['gin_trgm_ops']),
+            models.Index(fields=['content_type']),
+            models.Index(fields=['difficulty_level']),
+            models.Index(fields=['curriculum']),
         ]
 
     def __str__(self):
@@ -481,6 +504,86 @@ class FeedReport(models.Model):
 
     def __str__(self):
         return f"Report({self.target_type}:{self.id})"
+
+
+# ---------------------------------------------------------------------------
+# New lesson metadata reference models
+# ---------------------------------------------------------------------------
+
+class FeedContentType(models.Model):
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'feed_feedcontenttype'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class FeedDifficultyLevel(models.Model):
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=100, unique=True)
+    order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'feed_feeddifficultylevel'
+        ordering = ['order', 'name']
+
+    def __str__(self):
+        return self.name
+
+
+class FeedCurriculum(models.Model):
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'feed_feedcurriculum'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class FeedLearningObjective(models.Model):
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'feed_feedlearningobjective'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class FeedVisibilityScope(models.Model):
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=100, unique=True)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'feed_feedvisibilityscope'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
 
 
 # ---------------------------------------------------------------------------

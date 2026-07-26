@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from apps.feed import views, guest_views
+from apps.feed import views, guest_views, recommendation_views
 
 router = DefaultRouter()
 router.register(r'lesson', views.FeedLessonViewSet, basename='feed-lesson')
@@ -47,6 +47,16 @@ urlpatterns = [
     path('guest/feed/', guest_views.GuestFeedView.as_view(), name='guest-feed'),
     path('guest/like/', guest_views.GuestLikeView.as_view(), name='guest-like'),
 
+    # =================================================================
+    # Recommendation & Interaction Tracking endpoints (new)
+    # =================================================================
+    path('blended/', recommendation_views.BlendedFeedView.as_view(), name='feed-blended'),
+    path('interactions/', recommendation_views.record_interaction, name='feed-interaction'),
+    path('interactions/batch/', recommendation_views.record_batch_interactions, name='feed-interactions-batch'),
+    path('interactions/impressions/', recommendation_views.record_impressions, name='feed-interactions-impressions'),
+    path('interactions/watch/', recommendation_views.record_watch_progress, name='feed-interactions-watch'),
+    path('interactions/summary/', recommendation_views.InteractionSummaryView.as_view(), name='feed-interactions-summary'),
+    path('interests/', recommendation_views.InterestScoresView.as_view(), name='feed-interests'),
+
     path('', include(router.urls)),
 ]
-

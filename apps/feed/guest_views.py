@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.feed.services.guest_service import GuestService
+from apps.feed.services.interest_scoring_service import InterestScoringService
 from apps.feed.pagination import FeedCursorPagination
 from apps.feed.serializers import LessonListSerializer
 
@@ -68,6 +69,14 @@ class GuestOnboardView(APIView):
         ).count()
         if valid_subject_count != len(subject_ids):
             return Response({'error': 'One or more subject_ids are invalid.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Seed interest scores from onboarding preferences
+        InterestScoringService.seed_from_onboarding(
+            guest_device_id=device_id,
+            subject_ids=subject_ids,
+            level_id=level_id,
+            class_id=class_id,
+        )
 
         profile = GuestService.create_guest_profile(
             device_id=device_id,
@@ -164,4 +173,3 @@ class GuestLikeView(APIView):
 
         result = GuestService.toggle_like(device_id, lesson_id)
         return Response(result)
-

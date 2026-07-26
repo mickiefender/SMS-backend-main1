@@ -67,12 +67,23 @@ class LessonListSerializer(serializers.ModelSerializer):
     cloudflare_thumbnail_url = serializers.URLField(read_only=True)
     video_duration = serializers.FloatField(read_only=True)
 
+    # New lesson metadata fields
+    content_type_name = serializers.SerializerMethodField()
+    difficulty_level_name = serializers.SerializerMethodField()
+    curriculum_name = serializers.SerializerMethodField()
+    learning_objective_name = serializers.SerializerMethodField()
+
     class Meta:
         model = models.FeedLesson
         fields = [
             'id', 'title', 'description', 'topic', 'teacher_id', 'teacher_name',
             'school_id', 'school_name', 'level_id', 'level_name',
             'class_obj_id', 'class_name', 'subject_id', 'subject_name',
+            'content_type_id', 'content_type_name',
+            'difficulty_level_id', 'difficulty_level_name',
+            'curriculum_id', 'curriculum_name',
+            'learning_objective_id', 'learning_objective_name',
+            'keywords', 'hashtags',
             'visibility', 'status', 'verification_status',
             'duration_seconds', 'thumbnail_url', 'poster_url',
             'video_url', 'video_uid', 'playback_url',
@@ -130,6 +141,18 @@ class LessonListSerializer(serializers.ModelSerializer):
             return False
         return models.TeacherFollower.objects.filter(user=user, teacher=obj.teacher).exists()
 
+    def get_content_type_name(self, obj):
+        return obj.content_type.name if obj.content_type else None
+
+    def get_difficulty_level_name(self, obj):
+        return obj.difficulty_level.name if obj.difficulty_level else None
+
+    def get_curriculum_name(self, obj):
+        return obj.curriculum.name if obj.curriculum else None
+
+    def get_learning_objective_name(self, obj):
+        return obj.learning_objective.name if obj.learning_objective else None
+
 
 class LessonDetailSerializer(LessonListSerializer):
     resources = LessonResourceSerializer(many=True, read_only=True)
@@ -147,13 +170,26 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     )
     media_file = serializers.FileField(required=False, write_only=True)
     thumbnail_file = serializers.FileField(required=False, write_only=True)
+    content_type_id = serializers.IntegerField(required=False, allow_null=True)
+    difficulty_level_id = serializers.IntegerField(required=False, allow_null=True)
+    curriculum_id = serializers.IntegerField(required=False, allow_null=True)
+    learning_objective_id = serializers.IntegerField(required=False, allow_null=True)
+    keywords = serializers.ListField(
+        child=serializers.CharField(max_length=100), required=False, allow_empty=True
+    )
+    hashtags = serializers.ListField(
+        child=serializers.CharField(max_length=100), required=False, allow_empty=True
+    )
 
     class Meta:
         model = models.FeedLesson
         fields = [
             'id', 'title', 'description', 'topic', 'school', 'level', 'class_obj',
-            'subject', 'tags', 'resources', 'media_file', 'thumbnail_file', 'visibility', 'status',
+            'subject', 'tags', 'resources', 'media_file', 'thumbnail_file',
+            'visibility', 'status',
             'duration_seconds', 'thumbnail_url', 'poster_url', 'extra_metadata',
+            'content_type_id', 'difficulty_level_id', 'curriculum_id',
+            'learning_objective_id', 'keywords', 'hashtags',
         ]
         read_only_fields = ['id']
 
