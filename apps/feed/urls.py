@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from apps.feed import views, guest_views, recommendation_views
+from apps.feed import views, guest_views, recommendation_views, views_direct_upload
 
 router = DefaultRouter()
 router.register(r'lesson', views.FeedLessonViewSet, basename='feed-lesson')
@@ -46,6 +46,9 @@ urlpatterns = [
     path('guest/profile/', guest_views.GuestProfileView.as_view(), name='guest-profile'),
     path('guest/feed/', guest_views.GuestFeedView.as_view(), name='guest-feed'),
     path('guest/like/', guest_views.GuestLikeView.as_view(), name='guest-like'),
+
+    # Direct upload URL for Cloudflare Stream (bypasses nginx)
+    path('direct-upload-url/', views_direct_upload.DirectUploadUrlView.as_view(), name='feed-direct-upload-url'),
 
     # =================================================================
     # Recommendation & Interaction Tracking endpoints (new)

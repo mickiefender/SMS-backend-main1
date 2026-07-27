@@ -374,6 +374,52 @@ class CloudflareStreamService:
         return True
 
     # ------------------------------------------------------------------
+    # Direct creator upload (bypasses nginx for large files)
+    # ------------------------------------------------------------------
+
+    def create_direct_upload_url(
+        self,
+        max_duration_seconds: int = 600,
+    ) -> Dict[str, str]:
+        """
+        Get a one-time upload URL from Cloudflare Stream.
+
+        The Flutter app should PUT/POST the video file directly to the
+        returned ``upload_url``, bypassing the Django server's nginx.
+
+        Returns:
+          {
+            "upload_url": "https://upload.videodelivery.net/...",
+            "uid": "abc123...",
+          }
+        """
+        url = self._api_url('direct_upload')
+        body = {
+            'maxDurationSeconds': max_duration_seconds,
+        }
+
+        try:
+            resp = requests.post(url, headers=self._headers, json=body, timeout=15)
+        except requests.RequestException as exc:
+            raise CloudflareStreamError(f'Direct upload request failed: {exc}') from exc
+
+        if resp.status_code != 200:
+            raise CloudflareStreamError(
+                f'Cloudflare direct upload failed (HTTP {resp.status_code}): {resp.text}'
+            )
+
+        result = resp.json()
+        if not result.get('success'):
+            raise CloudflareStreamError(
+                f'Cloudflare direct upload errors: {result.get("errors")}'
+            )
+
+        return {
+            'upload_url': result['result']['uploadURL'],
+            'uid': result['result']['uid'],
+        }
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
