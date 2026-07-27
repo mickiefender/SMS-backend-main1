@@ -49,6 +49,7 @@ class LessonService:
         Create a lesson and optionally attach resources.
         `validated_data` should already be serializer-validated.
         """
+        cloudflare_video_uid = validated_data.pop('cloudflare_video_uid', '')
         tags = validated_data.pop('tags', [])
         resources = validated_data.pop('resources', [])
         media_file = validated_data.pop('media_file', None)
@@ -60,9 +61,38 @@ class LessonService:
         if status == 'approved' and visibility == 'public':
             validated_data['published_at'] = timezone.now()
 
+        # If cloudflare_video_uid was provided (direct upload), set it immediately
+        # so the lesson has a video even before transcoding finishes.
+        if cloudflare_video_uid:
+            validated_data['cloudflare_video_uid'] = cloudflare_video_uid
+
         lesson = models.FeedLesson.objects.create(teacher=teacher, **validated_data)
         if tags:
             lesson.tags.set(tags)
+
+        # If a Cloudflare direct upload UID was provided, create the LessonResource
+        # and schedule background finalisation.
+        if cloudflare_video_uid:
+            resource = models.LessonResource.objects.create(
+                lesson=lesson,
+                resource_type='video',
+                title='Video',
+                storage_bucket='cloudflare-stream',
+                storage_path=f'cf://{cloudflare_video_uid}',
+                public_url='',
+                file_size=0,
+                mime_type='video/mp4',
+                duration_seconds=0,
+                sort_order=0,
+                is_primary=True,
+                extra_metadata={
+                    'cloudflare_uid': cloudflare_video_uid,
+                    'upload_source': 'direct_upload',
+                    'processing_status': 'processing',
+                },
+            )
+            from apps.feed.tasks import finalize_cloudflare_video_upload
+            finalize_cloudflare_video_upload.delay(resource.id)
 
         # Handle media file upload if provided
         if media_file:

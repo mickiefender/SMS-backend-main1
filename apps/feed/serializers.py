@@ -180,6 +180,10 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     hashtags = serializers.ListField(
         child=serializers.CharField(max_length=100), required=False, allow_empty=True
     )
+    cloudflare_video_uid = serializers.CharField(
+        required=False, allow_blank=True, write_only=True,
+        help_text='UID from direct upload to Cloudflare Stream. When provided, media_file is ignored for videos.'
+    )
 
     class Meta:
         model = models.FeedLesson
@@ -190,6 +194,7 @@ class LessonWriteSerializer(serializers.ModelSerializer):
             'duration_seconds', 'thumbnail_url', 'poster_url', 'extra_metadata',
             'content_type_id', 'difficulty_level_id', 'curriculum_id',
             'learning_objective_id', 'keywords', 'hashtags',
+            'cloudflare_video_uid',
         ]
         read_only_fields = ['id']
 
