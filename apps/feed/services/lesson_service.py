@@ -70,29 +70,78 @@ class LessonService:
         if tags:
             lesson.tags.set(tags)
 
-        # If a Cloudflare direct upload UID was provided, create the LessonResource
-        # and schedule background finalisation.
+        # If a Cloudflare direct upload UID was provided, poll Cloudflare
+        # synchronously for the playback URL. The video was already uploaded
+        # by the Flutter app directly to Cloudflare Stream's upload URL.
+        # We only need to wait for Cloudflare to finish transcoding.
         if cloudflare_video_uid:
+            from apps.feed.services.cloudflare_stream_service import (
+                CloudflareStreamService,
+                CloudflareStreamError,
+            )
+            cf_service = CloudflareStreamService()
+            try:
+                cf_result = cf_service.poll_until_ready(
+                    cloudflare_video_uid,
+                    max_seconds=60,   # wait up to 60s for playback URL
+                    interval=2.0,
+                )
+            except CloudflareStreamError:
+                cf_result = {
+                    'uid': cloudflare_video_uid,
+                    'status': 'pending',
+                    'playback_url': None,
+                    'thumbnail_url': None,
+                    'duration': 0,
+                }
+
+            playback_url = cf_result.get('playback_url') or ''
+            thumbnail_url = cf_result.get('thumbnail_url') or ''
+            duration = cf_result.get('duration', 0)
+
+            # Update lesson Cloudflare fields
+            lesson.cloudflare_playback_url = playback_url
+            lesson.cloudflare_thumbnail_url = thumbnail_url or ''
+            lesson.video_duration = duration
+            lesson.duration_seconds = max(lesson.duration_seconds, int(duration))
+            if not lesson.poster_url and thumbnail_url:
+                lesson.poster_url = thumbnail_url
+            if not lesson.thumbnail_url and thumbnail_url:
+                lesson.thumbnail_url = thumbnail_url
+            lesson.save(update_fields=[
+                'cloudflare_playback_url',
+                'cloudflare_thumbnail_url',
+                'video_duration',
+                'duration_seconds',
+                'poster_url',
+                'thumbnail_url',
+            ])
+
+            # Create LessonResource with the playback URL immediately
             resource = models.LessonResource.objects.create(
                 lesson=lesson,
                 resource_type='video',
                 title='Video',
                 storage_bucket='cloudflare-stream',
                 storage_path=f'cf://{cloudflare_video_uid}',
-                public_url='',
+                public_url=playback_url,
                 file_size=0,
                 mime_type='video/mp4',
-                duration_seconds=0,
+                duration_seconds=int(duration),
                 sort_order=0,
                 is_primary=True,
                 extra_metadata={
                     'cloudflare_uid': cloudflare_video_uid,
+                    'cloudflare_thumbnail_url': thumbnail_url,
                     'upload_source': 'direct_upload',
-                    'processing_status': 'processing',
+                    'processing_status': 'ready' if playback_url else 'processing',
                 },
             )
-            from apps.feed.tasks import finalize_cloudflare_video_upload
-            finalize_cloudflare_video_upload.delay(resource.id)
+
+            # If playback URL not ready yet, schedule a background task
+            if not playback_url:
+                from apps.feed.tasks import finalize_cloudflare_video_upload
+                finalize_cloudflare_video_upload.delay(resource.id)
 
         # Handle media file upload if provided
         if media_file:
