@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'apps.storage',
     'apps.messaging',
     'apps.feed',
+    'apps.notifications',
 ]
 
 MIDDLEWARE = [

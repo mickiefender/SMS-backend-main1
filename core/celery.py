@@ -46,6 +46,22 @@ app.conf.beat_schedule = {
         'task': 'apps.feed.tasks.invalidate_expired_recommendation_cache',
         'schedule': 3600.0,
     },
+    # ─── Notifications ──────────────────────────────────────────────
+    # Send assignment and fee reminders every 6 hours
+    'send-scheduled-reminders': {
+        'task': 'apps.notifications.tasks.send_scheduled_reminders',
+        'schedule': 21600.0,  # every 6 hours
+    },
+    # Clean stale FCM devices daily at 4 AM
+    'clean-invalid-devices': {
+        'task': 'apps.notifications.tasks.clean_invalid_devices',
+        'schedule': crontab(hour=4, minute=0),
+    },
+    # Daily learning reminders at 4 PM
+    'send-daily-learning-reminders': {
+        'task': 'apps.notifications.tasks.send_daily_learning_reminders',
+        'schedule': crontab(hour=16, minute=0),
+    },
 }
 
 @app.task(bind=True)

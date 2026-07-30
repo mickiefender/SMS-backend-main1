@@ -24,6 +24,8 @@ urlpatterns = [
     path('api/feed/', include('apps.feed.urls')),
     # Student notifications API
     path('api/', include(router.urls)),
+    # Centralized notifications API
+    path('api/notifications/', include('apps.notifications.urls')),
 ]
 
 if settings.DEBUG:
