@@ -33,3 +33,6 @@ resend>=0.7.0
 ffmpeg-python>=0.2.0
 mutagen>=1.47.0
 PyJWT>=2.8.0
+
+# Firebase Admin SDK for push notifications (FCM v1 API)
+firebase-admin>=6.5.0

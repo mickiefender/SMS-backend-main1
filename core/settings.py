@@ -179,6 +179,25 @@ CLOUDFLARE_STREAM_API_TOKEN = os.environ.get('CLOUDFLARE_STREAM_API_TOKEN', '')
 CLOUDFLARE_STREAM_ACCOUNT_ID = os.environ.get('CLOUDFLARE_STREAM_ACCOUNT_ID', '')
 CLOUDFLARE_STREAM_SIGNING_KEY = os.environ.get('CLOUDFLARE_STREAM_SIGNING_KEY', '')
 
+# Firebase Cloud Messaging (FCM) Configuration — Firebase Admin SDK
+# The Admin SDK authenticates with a service-account credential (NOT a legacy
+# server key). Provide one of the two options below; PATH is preferred in
+# deployments with a persistent filesystem, JSON is ideal for serverless/
+# Supabase-hosted backends.
+#
+#  1. FIREBASE_SERVICE_ACCOUNT_PATH:
+#     Path to the service-account JSON downloaded from:
+#     Firebase Console → Project settings → Service accounts →
+#     "Generate new private key"
+#
+#  2. FIREBASE_SERVICE_ACCOUNT_JSON:
+#     The literal contents of that same JSON file (single line string).
+FIREBASE_SERVICE_ACCOUNT_PATH = os.environ.get('FIREBASE_SERVICE_ACCOUNT_PATH', '')
+FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON', '')
+
+# Backward-compat alias (legacy server key is no longer used by the Admin SDK)
+FCM_SERVER_KEY = os.environ.get('FCM_SERVER_KEY', '')
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
