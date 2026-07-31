@@ -22,10 +22,13 @@ urlpatterns = [
     path('api/students/', include('apps.students.urls')),
     path('api/messaging/', include('apps.messaging.urls')),
     path('api/feed/', include('apps.feed.urls')),
-    # Student notifications API
-    path('api/', include(router.urls)),
-    # Centralized notifications API
+    # Centralized notifications API — must come BEFORE the legacy
+    # /api/notifications/ router below, otherwise requests like
+    # POST /api/notifications/devices/ are captured by the old
+    # StudentNotificationViewSet as {pk}="devices" and rejected with 405.
     path('api/notifications/', include('apps.notifications.urls')),
+    # Legacy student notifications API
+    path('api/', include(router.urls)),
 ]
 
 if settings.DEBUG:
