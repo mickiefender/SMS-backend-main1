@@ -473,29 +473,38 @@ class ClassViewSet(viewsets.ModelViewSet):
             })
 
         # ── Students per class ────────────────────────────────────
+        # Prefer StudentClass assignments; fall back to subject Enrollments
+        # when no class-assignment rows exist for these classes.
         student_qs = StudentClass.objects.filter(
             class_obj_id__in=assigned_class_ids,
             is_active=True
         ).values('class_obj_id', 'student_id')
+        if not student_qs.exists():
+            from apps.academics.models import Enrollment
+            student_qs = Enrollment.objects.filter(
+                class_obj_id__in=assigned_class_ids,
+                is_active=True,
+            ).values('class_obj_id', 'student_id').distinct()
 
         class_students = {}
         for row in student_qs:
             class_students.setdefault(row['class_obj_id'], set()).add(row['student_id'])
 
         # ── Grade aggregation (raw percentage, live) ──────────────
-        grades_qs = Grade.objects.filter(
+        # Annotate the raw percentage on each grade row first, then aggregate
+        # by class. Splitting the annotation and aggregation is canonical and
+        # avoids ExpressionWrapper/SQL portability issues.
+        graded_rows = Grade.objects.filter(
             student__class_assignments__class_obj_id__in=assigned_class_ids,
             student__class_assignments__is_active=True,
-        ).filter(
-            max_score__gt=0
-        ).values('student__class_assignments__class_obj_id') \
+            max_score__gt=0,
+        ).annotate(
+            raw_percent=models.F('score') * 100.0 / models.F('max_score')
+        )
+
+        grades_qs = graded_rows.values('student__class_assignments__class_obj_id') \
          .annotate(
-            avg_raw_percent=(
-                Avg(models.ExpressionWrapper(
-                    models.F('score') * 100.0 / models.F('max_score'),
-                    output_field=models.FloatField()
-                ))
-            ),
+            avg_raw_percent=Avg('raw_percent'),
             total_grades=models.Count('id'),
         )
 
@@ -515,7 +524,26 @@ class ClassViewSet(viewsets.ModelViewSet):
             bucket['total'] += row['total']
 
         # ── Per-student breakdown (live) ──────────────────────────
+        # Students come from StudentClass assignments; fall back to subject
+        # enrollments when no class assignment rows exist yet.
         class_student_names = {}
+
+        def _student_display_name(student):
+            try:
+                getter = getattr(student, 'get_full_name', None)
+                if callable(getter):
+                    name = (getter() or '').strip()
+                    if name:
+                        return name
+            except Exception:
+                pass
+            first = getattr(student, 'first_name', '') or ''
+            last = getattr(student, 'last_name', '') or ''
+            combined = f'{first} {last}'.strip()
+            if combined:
+                return combined
+            return getattr(student, 'username', None) or 'Unknown'
+
         student_profile_qs = StudentClass.objects.filter(
             class_obj_id__in=assigned_class_ids,
             is_active=True
@@ -524,23 +552,35 @@ class ClassViewSet(viewsets.ModelViewSet):
             'student__first_name', 'student__last_name',
             'student__username', 'student__email',
         )
-        for se in student_profile_qs:
-            student = se.student
-            full_name = (student.get_full_name() or '').strip() or (student.username or 'Unknown')
-            class_student_names.setdefault(se.class_obj_id, {})[se.student_id] = full_name
+        if not student_profile_qs.exists():
+            # Fallback: derive students from subject enrollments.
+            from apps.academics.models import Enrollment
+            student_profile_qs = Enrollment.objects.filter(
+                class_obj_id__in=assigned_class_ids,
+                is_active=True,
+            ).select_related('student').only(
+                'class_obj_id', 'student_id',
+                'student__first_name', 'student__last_name',
+                'student__username', 'student__email',
+            ).distinct()
 
-        grade_entries = Grade.objects.filter(
+        for se in student_profile_qs:
+            class_student_names.setdefault(se.class_obj_id, {})[se.student_id] = _student_display_name(se.student)
+
+        # Annotate raw percentage per grade row first, then group by student.
+        per_student_graded = Grade.objects.filter(
             student__class_assignments__class_obj_id__in=assigned_class_ids,
             student__class_assignments__is_active=True,
             max_score__gt=0,
-        ).values(
+        ).annotate(
+            raw_percent=models.F('score') * 100.0 / models.F('max_score')
+        )
+
+        grade_entries = per_student_graded.values(
             'student__class_assignments__class_obj_id',
             'student_id',
         ).annotate(
-            student_avg=(Avg(models.ExpressionWrapper(
-                models.F('score') * 100.0 / models.F('max_score'),
-                output_field=models.FloatField()
-            ))),
+            student_avg=Avg('raw_percent'),
             total_grades=models.Count('id'),
         ).order_by('student_id')
 
@@ -598,16 +638,11 @@ class ClassViewSet(viewsets.ModelViewSet):
                 risk_grades = Grade.objects.filter(
                     student_id__in=student_ids,
                     max_score__gt=0,
+                ).annotate(
+                    raw_avg=models.F('score') * 100.0 / models.F('max_score')
                 ).values('student_id') \
-                 .annotate(
-                    raw_avg=(
-                        Avg(models.ExpressionWrapper(
-                            models.F('score') * 100.0 / models.F('max_score'),
-                            output_field=models.FloatField()
-                        ))
-                    )
-                 )
-                risk_student_ids = {r['student_id'] for r in risk_grades if (r['raw_avg'] or 0) < 40}
+                 .annotate(avg_raw=Avg('raw_avg'))
+                risk_student_ids = {r['student_id'] for r in risk_grades if (r['avg_raw'] or 0) < 40}
 
                 low_attendance_ids = set()
                 attendance_by_student = Attendance.objects.filter(
@@ -639,17 +674,12 @@ class ClassViewSet(viewsets.ModelViewSet):
                 grade_rows = Grade.objects.filter(
                     student_id__in=student_ids,
                     max_score__gt=0,
+                ).annotate(
+                    raw_avg=models.F('score') * 100.0 / models.F('max_score')
                 ).values('student_id') \
-                 .annotate(
-                    raw_avg=(
-                        Avg(models.ExpressionWrapper(
-                            models.F('score') * 100.0 / models.F('max_score'),
-                            output_field=models.FloatField()
-                        ))
-                    )
-                 )
+                 .annotate(avg_raw=Avg('raw_avg'))
                 for r in grade_rows:
-                    value = r['raw_avg'] or 0
+                    value = r['avg_raw'] or 0
                     if value >= 90:
                         grade_distribution['A'] += 1
                     elif value >= 80:
