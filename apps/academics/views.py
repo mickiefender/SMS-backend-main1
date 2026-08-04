@@ -460,6 +460,7 @@ class ClassViewSet(viewsets.ModelViewSet):
         if not assigned_class_ids:
             return Response({
                 'classes': [],
+                'students': [],
                 'overall': {
                     'total_classes': 0,
                     'total_students': 0,
@@ -511,6 +512,51 @@ class ClassViewSet(viewsets.ModelViewSet):
             bucket = class_attendance.setdefault(row['class_obj_id'], {'present': 0, 'late': 0, 'absent': 0, 'excused': 0, 'total': 0})
             key = row['status'] if row['status'] in bucket else 'absent'
             bucket[key] += row['total']
+            bucket['total'] += row['total']
+
+        # ── Per-student breakdown (live) ──────────────────────────
+        class_student_names = {}
+        student_profile_qs = StudentClass.objects.filter(
+            class_obj_id__in=assigned_class_ids,
+            is_active=True
+        ).select_related('student').only(
+            'class_obj_id', 'student_id',
+            'student__first_name', 'student__last_name',
+            'student__username', 'student__email',
+        )
+        for se in student_profile_qs:
+            student = se.student
+            full_name = (student.get_full_name() or '').strip() or (student.username or 'Unknown')
+            class_student_names.setdefault(se.class_obj_id, {})[se.student_id] = full_name
+
+        grade_entries = Grade.objects.filter(
+            student__class_assignments__class_obj_id__in=assigned_class_ids,
+            student__class_assignments__is_active=True,
+            max_score__gt=0,
+        ).values(
+            'student__class_assignments__class_obj_id',
+            'student_id',
+        ).annotate(
+            student_avg=(Avg(models.ExpressionWrapper(
+                models.F('score') * 100.0 / models.F('max_score'),
+                output_field=models.FloatField()
+            ))),
+            total_grades=models.Count('id'),
+        ).order_by('student_id')
+
+        attendance_entries = Attendance.objects.filter(
+            class_obj_id__in=assigned_class_ids,
+        ).values('class_obj_id', 'student_id', 'status') \
+         .annotate(total=models.Count('id'))
+
+        per_student_attendance = {}
+        for row in attendance_entries:
+            key = (row['class_obj_id'], row['student_id'])
+            bucket = per_student_attendance.setdefault(key, {'attended': 0, 'absent': 0, 'total': 0})
+            if row['status'] in ('present', 'late', 'excused'):
+                bucket['attended'] += row['total']
+            else:
+                bucket['absent'] += row['total']
             bucket['total'] += row['total']
 
         # ── Build per-class payloads ───────────────────────────────
@@ -634,6 +680,57 @@ class ClassViewSet(viewsets.ModelViewSet):
                 'trend': _grade_color_hint(combined_score),
             })
 
+        # ── Per-student payload (live, one row per enrolled student) ──
+        def _overall_grade_letter(score):
+            if score >= 90:
+                return 'A'
+            if score >= 80:
+                return 'B'
+            if score >= 70:
+                return 'C'
+            if score >= 60:
+                return 'D'
+            if score >= 50:
+                return 'E'
+            return 'F'
+
+        grade_by_student = {}
+        for row in grade_entries:
+            grade_by_student[(row['student__class_assignments__class_obj_id'], row['student_id'])] = row
+
+        students_payload = []
+        for class_id in sorted(assigned_class_ids, key=lambda c: (class_names.get(c) or '').lower()):
+            for student_id in sorted(class_students.get(class_id, set())):
+                grade_row = grade_by_student.get((class_id, student_id), {})
+                grade_score = round(grade_row.get('student_avg') or 0, 2) if grade_row else 0.0
+                total_grades = grade_row.get('total_grades', 0) if grade_row else 0
+
+                att = per_student_attendance.get((class_id, student_id), {'attended': 0, 'absent': 0, 'total': 0})
+                attendance_pct = round((att['attended'] / att['total'] * 100), 2) if att['total'] > 0 else 0.0
+
+                overall = round((grade_score * 0.6) + (attendance_pct * 0.4), 2)
+
+                level_name = next(
+                    (getattr(ct.class_obj.level, 'name', None) for ct in class_teacher_qs if ct.class_obj_id == class_id),
+                    None,
+                )
+
+                students_payload.append({
+                    'student_id': student_id,
+                    'student_name': class_student_names.get(class_id, {}).get(student_id, 'Unknown'),
+                    'class_id': class_id,
+                    'class_name': class_names.get(class_id) or 'Class',
+                    'level_name': level_name,
+                    'grade_score': grade_score,
+                    'total_grades': total_grades,
+                    'attendance_percentage': attendance_pct,
+                    'overall_score': overall,
+                    'grade': _overall_grade_letter(overall),
+                    'is_at_risk': overall < 40 or (att['total'] > 0 and attendance_pct < 75),
+                })
+
+        students_payload.sort(key=lambda s: s['overall_score'])
+
         # ── Overall summary ───────────────────────────────────────
         total_students = sum(c['student_count'] for c in classes_payload)
         graded_classes = [c for c in classes_payload if c['average_grade_score'] > 0 or c['average_attendance'] > 0]
@@ -655,6 +752,7 @@ class ClassViewSet(viewsets.ModelViewSet):
 
         return Response({
             'classes': classes_payload,
+            'students': students_payload,
             'overall': {
                 'total_classes': len(classes_payload),
                 'total_students': total_students,
