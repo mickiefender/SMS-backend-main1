@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import serializers
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import models, transaction
-from django.db.models import F, Q
+from django.db.models import F, Q, Avg
 from django.utils import timezone
 from core.permissions import IsSchoolAdminOrHigher, IsSchoolAdminOrTeacher, IsSchoolAdminOrSelf
 from apps.academics.models import (
@@ -417,6 +417,254 @@ class ClassViewSet(viewsets.ModelViewSet):
             },
             'attendance_overview': attendance_overview,
             'gender_distribution': gender_distribution,
+        })
+
+    @action(detail=False, methods=['get'], url_path='teacher-performance', permission_classes=[IsAuthenticated, IsSchoolAdminOrTeacher])
+    def teacher_performance(self, request):
+        """Real-time overall performance of students in the teacher's classes,
+        computed live from current Attendance records and Grade entries.
+
+        Composite score = 60% grade performance + 40% attendance.
+        Grade percentage is derived from raw score/max_score (not the stored
+        weighted percentage) so the overview reflects true achievement.
+        """
+        from apps.academics.models import ClassTeacher, ClassSubjectTeacher, StudentClass
+        from apps.attendance.models import Attendance
+        from apps.students.models import Grade
+
+        school_id = get_school_filter(request.user)
+        if school_id is None:
+            return Response({"error": "No school access"}, status=status.HTTP_403_FORBIDDEN)
+
+        # ── Classes assigned to this teacher ──────────────────────
+        class_teacher_qs = ClassTeacher.objects.filter(
+            teacher=request.user,
+            class_obj__school_id=school_id
+        ).select_related('class_obj', 'class_obj__level')
+
+        class_subject_teacher_qs = ClassSubjectTeacher.objects.filter(
+            teacher=request.user,
+            class_obj__school_id=school_id,
+            is_active=True
+        ).select_related('class_obj', 'class_obj__level')
+
+        assigned_class_ids = set()
+        class_names = {}
+        for ct in class_teacher_qs:
+            assigned_class_ids.add(ct.class_obj_id)
+            class_names[ct.class_obj_id] = ct.class_obj.name
+        for cst in class_subject_teacher_qs:
+            assigned_class_ids.add(cst.class_obj_id)
+            class_names[cst.class_obj_id] = cst.class_obj.name
+
+        if not assigned_class_ids:
+            return Response({
+                'classes': [],
+                'overall': {
+                    'total_classes': 0,
+                    'total_students': 0,
+                    'average_grade_score': 0,
+                    'average_attendance': 0,
+                    'overall_score': 0,
+                    'students_at_risk': 0,
+                    'top_class': None,
+                },
+            })
+
+        # ── Students per class ────────────────────────────────────
+        student_qs = StudentClass.objects.filter(
+            class_obj_id__in=assigned_class_ids,
+            is_active=True
+        ).values('class_obj_id', 'student_id')
+
+        class_students = {}
+        for row in student_qs:
+            class_students.setdefault(row['class_obj_id'], set()).add(row['student_id'])
+
+        # ── Grade aggregation (raw percentage, live) ──────────────
+        grades_qs = Grade.objects.filter(
+            student__class_assignments__class_obj_id__in=assigned_class_ids,
+            student__class_assignments__is_active=True,
+        ).filter(
+            max_score__gt=0
+        ).values('student__class_assignments__class_obj_id') \
+         .annotate(
+            avg_raw_percent=(
+                Avg(models.ExpressionWrapper(
+                    models.F('score') * 100.0 / models.F('max_score'),
+                    output_field=models.FloatField()
+                ))
+            ),
+            total_grades=models.Count('id'),
+        )
+
+        class_grade_data = {row['student__class_assignments__class_obj_id']: row for row in grades_qs}
+
+        # ── Attendance aggregation (current term records) ─────────
+        attendance_qs = Attendance.objects.filter(
+            class_obj_id__in=assigned_class_ids,
+        ).values('class_obj_id', 'status') \
+         .annotate(total=models.Count('id'))
+
+        class_attendance = {}
+        for row in attendance_qs:
+            bucket = class_attendance.setdefault(row['class_obj_id'], {'present': 0, 'late': 0, 'absent': 0, 'excused': 0, 'total': 0})
+            key = row['status'] if row['status'] in bucket else 'absent'
+            bucket[key] += row['total']
+            bucket['total'] += row['total']
+
+        # ── Build per-class payloads ───────────────────────────────
+        def _grade_color_hint(score):
+            if score >= 80:
+                return 'green'
+            if score >= 60:
+                return 'blue'
+            if score >= 40:
+                return 'orange'
+            return 'red'
+
+        classes_payload = []
+        students_at_risk_total = 0
+
+        for class_id in sorted(assigned_class_ids, key=lambda c: (class_names.get(c) or '').lower()):
+            student_ids = list(class_students.get(class_id, set()))
+            student_count = len(student_ids)
+
+            grade_row = class_grade_data.get(class_id)
+            avg_grade = round((grade_row['avg_raw_percent'] or 0), 2) if grade_row else 0.0
+            graded_students = 0
+            if student_ids:
+                graded_students = Grade.objects.filter(
+                    student_id__in=student_ids,
+                    max_score__gt=0,
+                ).values('student_id').distinct().count()
+
+            att = class_attendance.get(class_id, {'present': 0, 'late': 0, 'absent': 0, 'excused': 0, 'total': 0})
+            attended = att['present'] + att['late'] + att['excused']
+            attendance_pct = round((attended / att['total'] * 100), 2) if att['total'] > 0 else 0.0
+
+            # Composite: 60% grades + 40% attendance
+            combined_score = round((avg_grade * 0.6) + (attendance_pct * 0.4), 2)
+
+            # At-risk: score below 40 OR attendance below 75 (with grade data)
+            at_risk = 0
+            if student_ids:
+                risk_grades = Grade.objects.filter(
+                    student_id__in=student_ids,
+                    max_score__gt=0,
+                ).values('student_id') \
+                 .annotate(
+                    raw_avg=(
+                        Avg(models.ExpressionWrapper(
+                            models.F('score') * 100.0 / models.F('max_score'),
+                            output_field=models.FloatField()
+                        ))
+                    )
+                 )
+                risk_student_ids = {r['student_id'] for r in risk_grades if (r['raw_avg'] or 0) < 40}
+
+                low_attendance_ids = set()
+                attendance_by_student = Attendance.objects.filter(
+                    class_obj_id=class_id,
+                    student_id__in=student_ids
+                ).values('student_id', 'status') \
+                 .annotate(total=models.Count('id'))
+
+                per_student_att = {}
+                for row in attendance_by_student:
+                    entry = per_student_att.setdefault(row['student_id'], {'attended': 0, 'total': 0})
+                    if row['status'] in ('present', 'late', 'excused'):
+                        entry['attended'] += row['total']
+                    entry['total'] += row['total']
+
+                for sid, entry in per_student_att.items():
+                    if entry['total'] > 0:
+                        pct = entry['attended'] / entry['total'] * 100
+                        if pct < 75:
+                            low_attendance_ids.add(sid)
+
+                at_risk = len(risk_student_ids | low_attendance_ids)
+
+            students_at_risk_total += at_risk
+
+            # Grade distribution from raw percentages
+            grade_distribution = {'A': 0, 'B': 0, 'C': 0, 'D': 0, 'E': 0, 'F': 0}
+            if student_ids:
+                grade_rows = Grade.objects.filter(
+                    student_id__in=student_ids,
+                    max_score__gt=0,
+                ).values('student_id') \
+                 .annotate(
+                    raw_avg=(
+                        Avg(models.ExpressionWrapper(
+                            models.F('score') * 100.0 / models.F('max_score'),
+                            output_field=models.FloatField()
+                        ))
+                    )
+                 )
+                for r in grade_rows:
+                    value = r['raw_avg'] or 0
+                    if value >= 90:
+                        grade_distribution['A'] += 1
+                    elif value >= 80:
+                        grade_distribution['B'] += 1
+                    elif value >= 70:
+                        grade_distribution['C'] += 1
+                    elif value >= 60:
+                        grade_distribution['D'] += 1
+                    elif value >= 50:
+                        grade_distribution['E'] += 1
+                    else:
+                        grade_distribution['F'] += 1
+
+            classes_payload.append({
+                'class_id': class_id,
+                'class_name': class_names.get(class_id) or 'Class',
+                'level_name': next(
+                    (getattr(ct.class_obj.level, 'name', None) for ct in class_teacher_qs if ct.class_obj_id == class_id),
+                    None,
+                ),
+                'student_count': student_count,
+                'graded_students': graded_students,
+                'average_grade_score': avg_grade,
+                'average_attendance': attendance_pct,
+                'overall_score': combined_score,
+                'students_at_risk': at_risk,
+                'grade_distribution': grade_distribution,
+                'trend': _grade_color_hint(combined_score),
+            })
+
+        # ── Overall summary ───────────────────────────────────────
+        total_students = sum(c['student_count'] for c in classes_payload)
+        graded_classes = [c for c in classes_payload if c['average_grade_score'] > 0 or c['average_attendance'] > 0]
+        avg_grade_score = (
+            round(sum(c['average_grade_score'] for c in graded_classes) / len(graded_classes), 2)
+            if graded_classes else 0.0
+        )
+        avg_attendance = (
+            round(sum(c['average_attendance'] for c in graded_classes) / len(graded_classes), 2)
+            if graded_classes else 0.0
+        )
+        overall_score = round((avg_grade_score * 0.6) + (avg_attendance * 0.4), 2)
+
+        top = None
+        if classes_payload:
+            best = max(classes_payload, key=lambda c: c['overall_score'])
+            if best['overall_score'] > 0:
+                top = best['class_name']
+
+        return Response({
+            'classes': classes_payload,
+            'overall': {
+                'total_classes': len(classes_payload),
+                'total_students': total_students,
+                'average_grade_score': avg_grade_score,
+                'average_attendance': avg_attendance,
+                'overall_score': overall_score,
+                'students_at_risk': students_at_risk_total,
+                'top_class': top,
+            },
+            'computed_at': timezone.now().isoformat(),
         })
 
 
