@@ -12,11 +12,22 @@ class Grade(models.Model):
         ('quiz', 'Quiz'),
         ('continuous', 'Continuous Assessment'),
         ('assignment', 'Assignment'),
+        ('class_exercise', 'Class Exercise'),
+        ('project', 'Project'),
     )
     
     student = models.ForeignKey(User, on_delete=models.CASCADE, limit_choices_to={'role': 'student'}, related_name='grades')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
     assessment_type = models.CharField(max_length=20, choices=ASSESSMENT_TYPE_CHOICES)
+    # Link to the specific Assessment this grade belongs to (school-configured type + date + total marks)
+    assessment = models.ForeignKey(
+        'academics.Assessment',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='grades',
+        help_text='The specific assessment (type + date + total marks) this score belongs to.',
+    )
     academic_session = models.ForeignKey('academics.AcademicSession', on_delete=models.CASCADE, related_name='grades', null=True, blank=True)
     score = models.FloatField()
     max_score = models.FloatField(default=100)
@@ -31,29 +42,38 @@ class Grade(models.Model):
     
     class Meta:
         ordering = ['-recorded_date']
+        indexes = [
+            models.Index(fields=['assessment', 'student']),
+        ]
     
     def save(self, *args, **kwargs):
         # Calculate raw percentage from score
         raw_percentage = (self.score / self.max_score * 100) if self.max_score > 0 else 0
+        self.percentage = raw_percentage
         
-        # Apply grading policy weightage if academic_session is set
-        if self.academic_session_id:
-            from apps.academics.models import GradingPolicy
-            policy = GradingPolicy.objects.filter(
-                academic_session=self.academic_session,
-                assessment_type=self.assessment_type,
-                is_active=True
-            ).first()
-            
-            if policy and policy.weightage > 0:
-                # Apply the weightage: (raw_percentage * weightage / 100)
-                # Example: If test has 10% weightage and student scores 80%, 
-                # the stored percentage becomes 80 * 10/100 = 8
-                self.percentage = raw_percentage * (policy.weightage / 100)
-            else:
-                self.percentage = raw_percentage
+        # Apply the assessment's configured weight contribution (e.g. Assignment = 10%)
+        if self.assessment_id:
+            from apps.academics.models import Assessment
+            assessment = Assessment.objects.filter(pk=self.assessment_id).first()
+            if assessment is not None and assessment.weight_percentage > 0:
+                # Contribution = % score * weight. E.g. 80% on a 10% assignment = 8 points.
+                self.percentage = raw_percentage * (assessment.weight_percentage / 100)
+            elif assessment is not None and assessment.assessment_type_id:
+                atype = assessment.assessment_type
+                if atype and atype.weight_percentage > 0:
+                    self.percentage = raw_percentage * (atype.weight_percentage / 100)
         else:
-            self.percentage = raw_percentage
+            # Fallback: legacy grading policy weighting
+            if self.academic_session_id:
+                from apps.academics.models import GradingPolicy
+                policy = GradingPolicy.objects.filter(
+                    academic_session=self.academic_session,
+                    assessment_type=self.assessment_type,
+                    is_active=True
+                ).first()
+                
+                if policy and policy.weightage > 0:
+                    self.percentage = raw_percentage * (policy.weightage / 100)
         
         # Calculate the grade letter based on percentage
         self.grade = self.calculate_grade()

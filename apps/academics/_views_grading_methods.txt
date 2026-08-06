@@ -1,0 +1,241 @@
+def assessment_scores(self, request):
+        """Get students and their scores for a specific assessment"""
+        assessment_id = request.query_params.get('assessment_id')
+        if not assessment_id:
+            return Response({'error': 'assessment_id required'}, status=400)
+
+        try:
+            assessment = Assessment.objects.get(id=assessment_id)
+        except Assessment.DoesNotExist:
+            return Response({'error': 'Assessment not found'}, status=404)
+
+        # Get students in the class
+        from apps.academics.models import StudentClass as StudentEnrollment
+        student_enrollments = StudentEnrollment.objects.filter(
+            class_obj=assessment.class_obj,
+            is_active=True
+        ).select_related('student').order_by('student__first_name', 'student__last_name')
+
+        students = []
+        graded_count = 0
+
+        for se in student_enrollments:
+            student = se.student
+            # Check if grade exists for this assessment
+            grade = Grade.objects.filter(
+                student=student,
+                subject=assessment.subject,
+                academic_session=assessment.academic_session,
+            ).filter(
+                assessment_type='exam' if assessment.category == 'examination' else 'test'
+            ).first()
+
+            has_score = grade is not None
+            if has_score:
+                graded_count += 1
+
+            students.append({
+                'student_id': student.id,
+                'student_name': student.get_full_name() or student.username,
+                'first_name': student.first_name,
+                'last_name': student.last_name,
+                'score': grade.score if grade else None,
+                'grade_id': grade.id if grade else None,
+                'percentage': grade.percentage if grade else None,
+                'grade_letter': grade.grade if grade else None,
+                'has_score': has_score,
+            })
+
+        return Response({
+            'assessment': AssessmentSerializer(assessment).data,
+            'students': students,
+            'total_students': len(students),
+            'graded_count': graded_count,
+        })
+
+    @action(detail=True, methods=['post'], url_path='bulk_save_scores')
+    def bulk_save_scores(self, request, pk=None):
+        """Bulk save/update scores for all students in an assessment"""
+        try:
+            assessment = self.get_object()
+        except Assessment.DoesNotExist:
+            return Response({'error': 'Assessment not found'}, status=404)
+
+        scores_data = request.data.get('scores', [])
+        results = []
+        errors = []
+
+        for item in scores_data:
+            student_id = item.get('student_id')
+            score = item.get('score')
+
+            if not student_id or score is None:
+                errors.append({'student_id': student_id, 'error': 'student_id and score required'})
+                continue
+
+            try:
+                student_id = int(student_id)
+                score_val = float(score)
+            except (ValueError, TypeError):
+                errors.append({'student_id': student_id, 'error': 'Invalid student_id or score'})
+                continue
+
+            # Check student belongs to this class
+            from apps.academics.models import StudentClass as StudentEnrollment
+            enrolled = StudentEnrollment.objects.filter(
+                student_id=student_id,
+                class_obj=assessment.class_obj,
+                is_active=True
+            ).exists()
+
+            if not enrolled:
+                errors.append({'student_id': student_id, 'error': 'Student not in class'})
+                continue
+
+            # Create or update grade
+            assessment_type = 'exam' if assessment.category == 'examination' else 'test'
+            
+            try:
+                grade, created = Grade.objects.update_or_create(
+                    student_id=student_id,
+                    subject=assessment.subject,
+                    academic_session=assessment.academic_session,
+                    assessment_type=assessment_type,
+                    defaults={
+                        'score': score_val,
+                        'max_score': assessment.total_marks,
+                    }
+                )
+                results.append({
+                    'student_id': student_id,
+                    'grade_id': grade.id,
+                    'score': score_val,
+                    'percentage': grade.percentage,
+                    'grade': grade.grade,
+                    'was_created': created,
+                })
+            except Exception as e:
+                errors.append({'student_id': student_id, 'error': str(e)})
+
+        return Response({
+            'assessment_id': assessment.id,
+            'assessment_title': assessment.title,
+            'results': results,
+            'errors': errors,
+            'success_count': len(results),
+            'error_count': len(errors),
+        })
+
+    @action(detail=False, methods=['get'])
+    def compute_results(self, request):
+        """Compute final scores with grades, remarks, and positions for a class/subject"""
+        class_id = request.query_params.get('class_id')
+        subject_id = request.query_params.get('subject_id')
+        academic_session_id = request.query_params.get('academic_session_id')
+        term = request.query_params.get('term')
+
+        if not class_id or not subject_id:
+            return Response({'error': 'class_id and subject_id required'}, status=400)
+
+        try:
+            class_id = int(class_id)
+            subject_id = int(subject_id)
+        except ValueError:
+            return Response({'error': 'Invalid parameters'}, status=400)
+
+        school_id = get_school_filter(request.user)
+
+        # Get students in class
+        from apps.academics.models import StudentClass as StudentEnrollment
+        enrollments = StudentEnrollment.objects.filter(
+            class_obj_id=class_id,
+            is_active=True
+        ).select_related('student').order_by('student__first_name', 'student__last_name')
+
+        # Get grading policies for this session
+        grading_policies = GradingPolicy.objects.none()
+        if academic_session_id:
+            grading_policies = GradingPolicy.objects.filter(
+                school_id=school_id,
+                academic_session_id=academic_session_id,
+                is_active=True
+            )
+
+        results = []
+        for enrollment in enrollments:
+            student = enrollment.student
+
+            # Sum of all CA grade percentages
+            ca_grades = Grade.objects.filter(
+                student=student,
+                subject_id=subject_id,
+                assessment_type__in=['test', 'quiz', 'assignment', 'continuous'],
+                is_locked=True,
+            )
+            if academic_session_id:
+                ca_grades = ca_grades.filter(academic_session_id=academic_session_id)
+            
+            ca_total = ca_grades.aggregate(total=models.Sum('percentage'))['total'] or 0
+
+            # Exam grade
+            exam_grades = Grade.objects.filter(
+                student=student,
+                subject_id=subject_id,
+                assessment_type='exam',
+                is_locked=True,
+            )
+            if academic_session_id:
+                exam_grades = exam_grades.filter(academic_session_id=academic_session_id)
+            
+            exam_total = exam_grades.aggregate(total=models.Sum('percentage'))['total'] or 0
+            exam_count = exam_grades.count()
+            exam_avg = exam_total / exam_count if exam_count > 0 else 0
+
+            # Final = CA + Exam (simple sum)
+            final_score = ca_total + exam_avg
+
+            # Determine grade
+            grade_letter = 'F'
+            if final_score >= 90: grade_letter = 'A'
+            elif final_score >= 80: grade_letter = 'B'
+            elif final_score >= 70: grade_letter = 'C'
+            elif final_score >= 60: grade_letter = 'D'
+
+            remark = _get_remark_for_grade(grade_letter)
+
+            results.append({
+                'student_id': student.id,
+                'student_name': student.get_full_name() or student.username,
+                'ca_score': round(ca_total, 2),
+                'exam_score': round(exam_avg, 2),
+                'exam_max': 100,
+                'exam_percentage': round(exam_avg, 2),
+                'final_score': round(final_score, 2),
+                'percentage': round(final_score, 2),
+                'grade': grade_letter,
+                'remark': remark,
+                'position': 0,  # Will be assigned after sorting
+            })
+
+        # Sort and assign positions
+        results.sort(key=lambda r: (-r['final_score'], r['student_name']))
+        for idx, r in enumerate(results, start=1):
+            r['position'] = idx
+
+        summary = {
+            'highest_score': max((r['final_score'] for r in results), default=0),
+            'lowest_score': min((r['final_score'] for r in results), default=0),
+            'average_score': sum(r['final_score'] for r in results) / len(results) if results else 0,
+        }
+
+        return Response({
+            'class_id': class_id,
+            'subject_id': subject_id,
+            'academic_session_id': academic_session_id,
+            'term': term,
+            'results': results,
+            'total_students': len(results),
+            'summary': summary,
+        })
+
+

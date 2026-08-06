@@ -4,7 +4,7 @@ from apps.academics.models import (
     ClassSubject, Enrollment, Timetable, AcademicCalendarEvent,
     Exam, ExamResult, SchoolFees, SchoolEvent, Document, DocumentFolder, Notice, UserProfilePicture,
     ClassTeacher, StudentClass, ClassSubjectTeacher, AcademicSession, TerminalReport, SubjectScore, GradingPolicy,
-    TerminalReportTemplate, GradingScale, GradingScaleEntry, Assessment
+    TerminalReportTemplate, GradingScale, GradingScaleEntry, Assessment, AssessmentType
 )
 from django.contrib.auth import get_user_model
 
@@ -646,6 +646,36 @@ class GradingScaleWithEntriesSerializer(serializers.ModelSerializer):
         return instance
 
 
+# ==================== ASSESSMENT TYPE SERIALIZERS ====================
+
+class AssessmentTypeSerializer(serializers.ModelSerializer):
+    category_label = serializers.SerializerMethodField()
+    session_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssessmentType
+        fields = [
+            'id',
+            'school',
+            'academic_session',
+            'session_name',
+            'name',
+            'category',
+            'category_label',
+            'weight_percentage',
+            'is_active',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['school', 'created_at', 'updated_at']
+
+    def get_category_label(self, obj):
+        return obj.get_category_display()
+
+    def get_session_name(self, obj):
+        return obj.academic_session.name if obj.academic_session else 'All Sessions'
+
+
 # ==================== ASSESSMENT SERIALIZERS ====================
 
 class AssessmentSerializer(serializers.ModelSerializer):
@@ -655,10 +685,17 @@ class AssessmentSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     category_label = serializers.SerializerMethodField()
     term_label = serializers.SerializerMethodField()
+    assessment_type_name = serializers.SerializerMethodField()
+    assessment_type = serializers.PrimaryKeyRelatedField(
+        queryset=AssessmentType.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    weight_percentage = serializers.FloatField(required=False)
     
     class Meta:
         model = Assessment
-        fields = ['id', 'school', 'academic_session', 'session_name', 'subject', 'subject_name', 'class_obj', 'class_name', 'term', 'term_label', 'category', 'category_label', 'title', 'total_marks', 'assessment_date', 'weight_percentage', 'is_active', 'created_by', 'created_by_name', 'created_at', 'updated_at']
+        fields = ['id', 'school', 'academic_session', 'session_name', 'assessment_type', 'assessment_type_name', 'subject', 'subject_name', 'class_obj', 'class_name', 'term', 'term_label', 'category', 'category_label', 'title', 'total_marks', 'assessment_date', 'weight_percentage', 'is_active', 'created_by', 'created_by_name', 'created_at', 'updated_at']
         read_only_fields = ['school', 'created_by', 'created_at', 'updated_at']
     
     def get_subject_name(self, obj):
@@ -678,3 +715,8 @@ class AssessmentSerializer(serializers.ModelSerializer):
     
     def get_term_label(self, obj):
         return obj.get_term_display()
+    
+    def get_assessment_type_name(self, obj):
+        if obj.assessment_type:
+            return obj.assessment_type.name
+        return None

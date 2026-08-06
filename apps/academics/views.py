@@ -13,7 +13,7 @@ from apps.academics.models import (
     ClassSubject, Enrollment, Timetable, AcademicCalendarEvent,
     Exam, ExamResult, SchoolFees, SchoolEvent, Document, DocumentFolder, Notice, UserProfilePicture,
     ClassTeacher, StudentClass, ClassSubjectTeacher, AcademicSession, TerminalReport, SubjectScore, GradingPolicy,
-    TerminalReportTemplate, GradingScale, GradingScaleEntry, Assessment
+    TerminalReportTemplate, GradingScale, GradingScaleEntry, Assessment, AssessmentType
 )
 from apps.academics.serializers import (
     FacultySerializer, DepartmentSerializer, LevelSerializer,
@@ -25,7 +25,7 @@ from apps.academics.serializers import (
     AcademicSessionSerializer,
     TerminalReportListSerializer, GradingPolicySerializer,
     TerminalReportTemplateSerializer, GradingScaleSerializer, GradingScaleWithEntriesSerializer,
-    AssessmentSerializer, GradingScaleEntrySerializer
+    AssessmentSerializer, AssessmentTypeSerializer, GradingScaleEntrySerializer
 )
 
 class GenerateTerminalReportSerializer(serializers.Serializer):
@@ -1874,6 +1874,75 @@ class GradingScaleViewSet(viewsets.ModelViewSet):
 
 # ==================== ASSESSMENT VIEWSET (NEW) ====================
 
+class AssessmentTypeViewSet(viewsets.ModelViewSet):
+    """
+    School-admin-managed assessment types with weights per academic session.
+    E.g., Assignment (10%), Class Exercise (5%), Quiz (15%), Exam (70%).
+    Teachers pick one of these when creating an assessment.
+    """
+    serializer_class = AssessmentTypeSerializer
+    queryset = AssessmentType.objects.all()
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        school_id = get_school_filter(self.request.user)
+        if school_id is None:
+            return self.queryset.all()
+        return self.queryset.filter(school_id=school_id)
+
+    def perform_create(self, serializer):
+        school_id = get_school_filter(self.request.user)
+        if school_id:
+            serializer.save(school_id=school_id)
+        else:
+            serializer.save()
+
+    @action(detail=False, methods=['get'])
+    def active(self, request):
+        """
+        Active assessment types for the teacher's school.
+        Optional query param: academic_session_id. If provided, returns the
+        session-specific types, falling back to global (session-less) types so
+        teachers always have a usable configuration.
+        """
+        school_id = get_school_filter(request.user)
+        if school_id is None:
+            return Response(
+                {'error': 'No school assigned to this user'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        session_id = request.query_params.get('academic_session_id')
+        queryset = AssessmentType.objects.filter(
+            school_id=school_id,
+            is_active=True,
+        )
+
+        if session_id:
+            try:
+                session_id = int(session_id)
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'academic_session_id must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            session_specific = queryset.filter(
+                models.Q(academic_session_id=session_id) |
+                models.Q(academic_session_id__isnull=True)
+            )
+            queryset = session_specific
+        else:
+            queryset = queryset.filter(academic_session_id__isnull=True)
+
+        queryset = queryset.order_by('category', 'name')
+        return Response(AssessmentTypeSerializer(queryset, many=True).data)
+
+
 class GradingAssessmentViewSet(viewsets.ModelViewSet):
     """ViewSet for managing assessments (exam types created by school admin)"""
     serializer_class = AssessmentSerializer
@@ -1889,11 +1958,21 @@ class GradingAssessmentViewSet(viewsets.ModelViewSet):
         if school_id is None:
             return self.queryset.all()
         return self.queryset.filter(school_id=school_id).select_related(
-            'subject', 'class_obj', 'academic_session', 'created_by'
+            'subject', 'class_obj', 'academic_session', 'created_by', 'assessment_type'
         )
 
     def perform_create(self, serializer):
         school_id = get_school_filter(self.request.user)
+        data = serializer.validated_data
+
+        # Auto-derive category + weight from the school-configured assessment type.
+        assessment_type = data.get('assessment_type')
+        if assessment_type is not None:
+            if not data.get('category'):
+                data['category'] = assessment_type.category
+            if not data.get('weight_percentage') or data.get('weight_percentage') == 0:
+                data['weight_percentage'] = assessment_type.weight_percentage
+
         if school_id:
             serializer.save(school_id=school_id, created_by=self.request.user)
         else:
@@ -1963,14 +2042,22 @@ class GradingAssessmentViewSet(viewsets.ModelViewSet):
 
         for se in student_enrollments:
             student = se.student
-            # Check if grade exists for this assessment
+            # Check if grade exists for this assessment (assessment-linked first,
+            # fall back to legacy type-based lookup for pre-migration rows)
             grade = Grade.objects.filter(
                 student=student,
-                subject=assessment.subject,
-                academic_session=assessment.academic_session,
-            ).filter(
-                assessment_type='exam' if assessment.category == 'examination' else 'test'
+                assessment=assessment,
             ).first()
+
+            if grade is None:
+                legacy_type = 'exam' if assessment.category == 'examination' else 'test'
+                grade = Grade.objects.filter(
+                    student=student,
+                    subject=assessment.subject,
+                    academic_session=assessment.academic_session,
+                    assessment_type=legacy_type,
+                    assessment__isnull=True,
+                ).first()
 
             has_score = grade is not None
             if has_score:
@@ -2034,15 +2121,28 @@ class GradingAssessmentViewSet(viewsets.ModelViewSet):
                 errors.append({'student_id': student_id, 'error': 'Student not in class'})
                 continue
 
-            # Create or update grade
-            assessment_type = 'exam' if assessment.category == 'examination' else 'test'
-            
+            # Map the assessment type (school-configured type name → Grade.assessment_type).
+            # Fall back to the category-derived legacy value when no type is linked.
+            grade_assessment_type = 'test'
+            if assessment.assessment_type_id:
+                type_name = (assessment.assessment_type.name or '').strip().lower().replace(' ', '_')
+                allowed = {choice[0] for choice in Grade.ASSESSMENT_TYPE_CHOICES}
+                if type_name in allowed:
+                    grade_assessment_type = type_name
+                elif assessment.category == 'examination':
+                    grade_assessment_type = 'exam'
+                else:
+                    grade_assessment_type = 'test'
+            elif assessment.category == 'examination':
+                grade_assessment_type = 'exam'
+
             try:
                 grade, created = Grade.objects.update_or_create(
                     student_id=student_id,
                     subject=assessment.subject,
                     academic_session=assessment.academic_session,
-                    assessment_type=assessment_type,
+                    assessment=assessment,
+                    assessment_type=grade_assessment_type,
                     defaults={
                         'score': score_val,
                         'max_score': assessment.total_marks,
@@ -2103,38 +2203,51 @@ class GradingAssessmentViewSet(viewsets.ModelViewSet):
                 is_active=True
             )
 
+        # All active assessments for this class/subject/session — used to weight
+        # each grade's contribution (score ÷ total_marks × weight_percentage).
+        assessments = Assessment.objects.filter(
+            class_obj_id=class_id,
+            subject_id=subject_id,
+            academic_session_id=academic_session_id,
+            is_active=True,
+        ) if academic_session_id else Assessment.objects.none()
+
         results = []
         for enrollment in enrollments:
             student = enrollment.student
 
-            # Sum of all CA grade percentages
-            ca_grades = Grade.objects.filter(
+            # ── Assessment-linked grades (weighted by each assessment's weight) ──
+            linked_grades = Grade.objects.filter(
                 student=student,
                 subject_id=subject_id,
-                assessment_type__in=['test', 'quiz', 'assignment', 'continuous'],
+                assessment__isnull=False,
                 is_locked=True,
             )
             if academic_session_id:
-                ca_grades = ca_grades.filter(academic_session_id=academic_session_id)
-            
-            ca_total = ca_grades.aggregate(total=models.Sum('percentage'))['total'] or 0
+                linked_grades = linked_grades.filter(academic_session_id=academic_session_id)
+            linked_grades = linked_grades.select_related('assessment')
 
-            # Exam grade
-            exam_grades = Grade.objects.filter(
-                student=student,
-                subject_id=subject_id,
-                assessment_type='exam',
-                is_locked=True,
-            )
-            if academic_session_id:
-                exam_grades = exam_grades.filter(academic_session_id=academic_session_id)
-            
-            exam_total = exam_grades.aggregate(total=models.Sum('percentage'))['total'] or 0
-            exam_count = exam_grades.count()
+            final_score = 0.0
+            total_weight_applied = 0.0
+            weight_by_category = {'continuous_assessment': 0.0, 'examination': 0.0}
+
+            for grade in linked_grades:
+                assessment = grade.assessment
+                weight = assessment.weight_percentage if assessment else 0
+                # The Grade.percentage already encodes score% × weight%, so the
+                # contribution toward the final 0–100 score is exactly that value.
+                final_score += grade.percentage or 0
+                total_weight_applied += weight
+                category = assessment.category if assessment else 'continuous_assessment'
+                weight_by_category[category] = weight_by_category.get(category, 0.0) + weight
+
+            ca_total = weight_by_category.get('continuous_assessment', 0.0)
+            exam_total = weight_by_category.get('examination', 0.0)
+            exam_count = linked_grades.filter(assessment__category='examination').count()
             exam_avg = exam_total / exam_count if exam_count > 0 else 0
 
-            # Final = CA + Exam (simple sum)
-            final_score = ca_total + exam_avg
+            # Cap at 100 in case weights exceed the configured total.
+            final_score = min(final_score, 100.0)
 
             # Determine grade
             grade_letter = 'F'

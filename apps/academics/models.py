@@ -750,6 +750,42 @@ class GradingScaleEntry(models.Model):
         return f"{self.grade_letter} ({self.min_percentage}-{self.max_percentage}%)"
 
 
+class AssessmentType(models.Model):
+    """
+    School-admin-managed assessment types configured per academic session.
+    E.g., "Assignment" (10%), "Class Exercise" (5%), "Quiz" (15%), "Exam" (70%).
+    Teachers pick a type when creating an Assessment; the type's weight is
+    used to compute the student's contribution toward the final score.
+    """
+    CATEGORY_CHOICES = (
+        ('continuous_assessment', 'Continuous Assessment'),
+        ('examination', 'Examination'),
+    )
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='assessment_types')
+    academic_session = models.ForeignKey(
+        AcademicSession,
+        on_delete=models.CASCADE,
+        related_name='assessment_types',
+        null=True,
+        blank=True,  # null = applies to all sessions (global default)
+    )
+    name = models.CharField(max_length=100)  # e.g., "Assignment", "Class Exercise", "Quiz", "Exam"
+    category = models.CharField(max_length=25, choices=CATEGORY_CHOICES, default='continuous_assessment')
+    weight_percentage = models.FloatField(default=0)  # e.g., 10 for 10% contribution
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['school', 'academic_session', 'name']
+        ordering = ['category', 'name']
+
+    def __str__(self):
+        session = self.academic_session.name if self.academic_session else 'All Sessions'
+        return f"{self.school.name} - {session} - {self.name} ({self.weight_percentage}%)"
+
+
 class Assessment(models.Model):
     """ 
     Exam types / assessments created by school admin.
@@ -763,6 +799,14 @@ class Assessment(models.Model):
     
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='assessments')
     academic_session = models.ForeignKey(AcademicSession, on_delete=models.CASCADE, related_name='assessments')
+    assessment_type = models.ForeignKey(
+        AssessmentType,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assessments',
+        help_text='The school-configured assessment type (Assignment, Quiz, Exam, etc.) whose weight is applied.',
+    )
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='assessments')
     class_obj = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='assessments')
     term = models.IntegerField(choices=[

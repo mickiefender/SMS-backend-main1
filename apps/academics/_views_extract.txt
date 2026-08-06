@@ -1,0 +1,537 @@
+class AssessmentViewSet(viewsets.ViewSet):
+    """Assessment helper endpoints used by grade entry workflow."""
+    permission_classes = [IsAuthenticated, IsSchoolAdminOrTeacher]
+
+    @action(detail=False, methods=['get'], url_path='by_class_subject_term')
+    def by_class_subject_term(self, request):
+        class_id = request.query_params.get('class_id')
+        subject_id = request.query_params.get('subject_id')
+        term = request.query_params.get('term')
+        academic_session_id = request.query_params.get('academic_session_id')
+
+        if not class_id or not subject_id:
+            return Response(
+                {'error': 'class_id and subject_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            class_id = int(class_id)
+            subject_id = int(subject_id)
+            if academic_session_id is not None:
+                academic_session_id = int(academic_session_id)
+            if term is not None:
+                term = int(term)
+        except ValueError:
+            return Response(
+                {'error': 'class_id, subject_id, term and academic_session_id must be integers when provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        school_id = get_school_filter(request.user)
+
+        # Base grade queryset
+        grades_qs = Grade.objects.filter(
+            student__class_assignments__class_obj_id=class_id,
+            student__class_assignments__is_active=True,
+            subject_id=subject_id,
+        ).select_related('student', 'subject', 'academic_session').distinct()
+
+        if school_id is not None:
+            grades_qs = grades_qs.filter(student__school_id=school_id)
+
+        if academic_session_id is not None:
+            grades_qs = grades_qs.filter(academic_session_id=academic_session_id)
+
+        if term is not None:
+            grades_qs = grades_qs.filter(
+                Q(academic_session__term=term) |
+                Q(academic_session__term__isnull=True)
+            )
+
+        # Teachers can only see grades they are allowed to manage
+        if request.user.role == 'teacher':
+            from apps.academics.models import ClassSubjectTeacher, ClassTeacher
+
+            allowed_subject_assignment = ClassSubjectTeacher.objects.filter(
+                teacher=request.user,
+                class_obj_id=class_id,
+                subject_id=subject_id,
+                is_active=True
+            ).exists()
+
+            is_form_tutor = ClassTeacher.objects.filter(
+                teacher=request.user,
+                class_obj_id=class_id,
+                is_form_tutor=True
+            ).exists()
+
+            if not (allowed_subject_assignment or is_form_tutor):
+                return Response(
+                    {'error': 'No access to assessments for this class/subject'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        results = []
+        for g in grades_qs:
+            max_score = float(g.max_score) if g.max_score else 100.0
+            score = float(g.score) if g.score is not None else None
+
+            results.append({
+                'id': g.id,
+                'student_id': g.student_id,
+                'student_name': g.student.get_full_name() or g.student.username,
+                'subject_id': g.subject_id,
+                'subject_name': g.subject.name if g.subject else None,
+                'assessment_type': g.assessment_type,
+                'score': score,
+                'max_score': max_score,
+                'percentage': float(g.percentage) if g.percentage is not None else None,
+                'grade': g.grade,
+                'is_locked': bool(g.is_locked),
+                'academic_session_id': g.academic_session_id,
+                'term': g.academic_session.term if g.academic_session else None,
+                'recorded_date': g.recorded_date,
+                'created_at': g.created_at,
+                'updated_at': g.updated_at,
+            })
+
+        return Response(results, status=status.HTTP_200_OK)
+
+
+class TerminalReportTemplateViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing terminal report templates"""
+    serializer_class = TerminalReportTemplateSerializer
+    
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+        return [IsAuthenticated()]
+    
+    def get_queryset(self):
+        school_id = get_school_filter(self.request.user)
+        if school_id is None:
+            return TerminalReportTemplate.objects.all()
+        return TerminalReportTemplate.objects.filter(school_id=school_id)
+    
+    from .utils import sanitize_html
+    
+    def perform_create(self, serializer):
+        school_id = getattr(self.request.user, 'school_id', None)
+        if school_id:
+            instance = serializer.save(school_id=school_id, created_by=self.request.user)
+            instance.html_template = sanitize_html(instance.html_template)
+            instance.save()
+        else:
+            instance = serializer.save(created_by=self.request.user)
+            instance.html_template = sanitize_html(instance.html_template)
+            instance.save()
+
+    from .utils import sanitize_html
+    
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        instance.html_template = sanitize_html(instance.html_template)
+        instance.save()
+        return instance
+    
+    @action(detail=False, methods=['get'])
+    def active(self, request):
+        """Get active templates for school/session"""
+        session_id = request.query_params.get('session_id')
+        school_id = get_school_filter(request.user)
+        templates = TerminalReportTemplate.objects.filter(school_id=school_id, is_active=True)
+        if session_id:
+            templates = templates.filter(academic_session_id=session_id)
+        templates = templates.order_by('-is_default')
+        return Response(self.get_serializer(templates, many=True).data)
+    
+    @action(detail=True, methods=['post'])
+    def set_default(self, request, pk=None):
+        """Set this template as default for school/session"""
+        template = self.get_object()
+        template.is_default = True
+        template.save()
+        return Response(self.get_serializer(template).data)
+    
+    @action(detail=True, methods=['post'])
+    def duplicate(self, request, pk=None):
+        """Duplicate this template"""
+        template = self.get_object()
+        new_template = TerminalReportTemplate.objects.create(
+            school=template.school,
+            academic_session=template.academic_session,
+            name=f"Copy of {template.name}",
+            structure=template.structure,
+            html_template=template.html_template,
+            preview_data=template.preview_data,
+            created_by=request.user
+        )
+        return Response(self.get_serializer(new_template).data)
+
+    @action(detail=False, methods=['post'])
+    def preview_render(self, request):
+        """Preview rendered template with mock/student data"""
+        template_id = request.data.get('template_id')
+        student_data = request.data.get('student_data', {})
+        try:
+            rendered_html = render_template_html(template_id, student_data)
+            return Response({'rendered_html': rendered_html})
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
+
+    @action(detail=True, methods=['post'])
+    def generate_pdf(self, request, pk=None):
+        """Generate PDF from rendered template"""
+        from weasyprint import HTML
+        from django.http import HttpResponse
+        
+        template = self.get_object()
+        student_data = request.data.get('student_data', {})
+        rendered_html = render_template_html(template.id, student_data)
+        
+        html_doc = HTML(string=rendered_html)
+        pdf_bytes = html_doc.write_pdf()
+        
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="report-{student_data.get("student_name", "student")}.pdf"'
+        return response
+
+
+# ==================== GRADING SCALE VIEWSET ====================
+
+class GradingScaleViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing grading scales (grade boundaries)"""
+    queryset = GradingScale.objects.all()
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+        return [IsAuthenticated()]
+
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return GradingScaleWithEntriesSerializer
+        return GradingScaleSerializer
+
+    def get_queryset(self):
+        school_id = get_school_filter(self.request.user)
+        if school_id is None:
+            return self.queryset.all()
+        return self.queryset.filter(school_id=school_id).prefetch_related('entries')
+
+    def perform_create(self, serializer):
+        school_id = get_school_filter(self.request.user)
+        if school_id:
+            serializer.save(school_id=school_id)
+        else:
+            serializer.save()
+
+    @action(detail=False, methods=['get'])
+    def active(self, request):
+        """Get active/default grading scales for school/session"""
+        session_id = request.query_params.get('session_id')
+        school_id = get_school_filter(request.user)
+        queryset = GradingScale.objects.filter(school_id=school_id, is_active=True)
+        if session_id:
+            queryset = queryset.filter(academic_session_id=session_id)
+        queryset = queryset.prefetch_related('entries').order_by('-is_default')
+        
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = GradingScaleSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = GradingScaleSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def set_default(self, request, pk=None):
+        """Set this grading scale as default"""
+        scale = self.get_object()
+        GradingScale.objects.filter(
+            school=scale.school,
+            academic_session=scale.academic_session
+        ).exclude(id=scale.id).update(is_default=False)
+        scale.is_default = True
+        scale.save()
+        serializer = GradingScaleSerializer(scale)
+        return Response(serializer.data)
+
+
+# ==================== ASSESSMENT VIEWSET (NEW) ====================
+
+class GradingAssessmentViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing assessments (exam types created by school admin)"""
+    serializer_class = AssessmentSerializer
+    queryset = Assessment.objects.all()
+
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAuthenticated(), IsSchoolAdminOrTeacher()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        school_id = get_school_filter(self.request.user)
+        if school_id is None:
+            return self.queryset.all()
+        return self.queryset.filter(school_id=school_id).select_related(
+            'subject', 'class_obj', 'academic_session', 'created_by'
+        )
+
+    def perform_create(self, serializer):
+        school_id = get_school_filter(self.request.user)
+        if school_id:
+            serializer.save(school_id=school_id, created_by=self.request.user)
+        else:
+            serializer.save(created_by=self.request.user)
+
+    @action(detail=False, methods=['get'], url_path='by_class_subject_term')
+    def by_class_subject_term(self, request):
+        """Get all assessments for a class/subject/term"""
+        class_id = request.query_params.get('class_id')
+        subject_id = request.query_params.get('subject_id')
+        term = request.query_params.get('term')
+        academic_session_id = request.query_params.get('academic_session_id')
+
+        if not class_id or not subject_id:
+            return Response({'error': 'class_id and subject_id are required'}, status=400)
+
+        try:
+            class_id = int(class_id)
+            subject_id = int(subject_id)
+            if academic_session_id: academic_session_id = int(academic_session_id)
+            if term: term = int(term)
+        except ValueError:
+            return Response({'error': 'Invalid parameters'}, status=400)
+
+        school_id = get_school_filter(request.user)
+        queryset = Assessment.objects.filter(
+            school_id=school_id,
+            class_obj_id=class_id,
+            subject_id=subject_id,
+            is_active=True
+        ).select_related('subject', 'class_obj', 'academic_session')
+
+        if academic_session_id:
+            queryset = queryset.filter(academic_session_id=academic_session_id)
+        if term:
+            queryset = queryset.filter(term=term)
+
+        continuous = queryset.filter(category='continuous_assessment')
+        examinations = queryset.filter(category='examination')
+
+        return Response({
+            'continuous_assessments': AssessmentSerializer(continuous, many=True).data,
+            'examinations': AssessmentSerializer(examinations, many=True).data
+        })
+
+    @action(detail=False, methods=['get'])
+    def assessment_scores(self, request):
+        """Get students and their scores for a specific assessment"""
+        assessment_id = request.query_params.get('assessment_id')
+        if not assessment_id:
+            return Response({'error': 'assessment_id required'}, status=400)
+
+        try:
+            assessment = Assessment.objects.get(id=assessment_id)
+        except Assessment.DoesNotExist:
+            return Response({'error': 'Assessment not found'}, status=404)
+
+        # Get students in the class
+        from apps.academics.models import StudentClass as StudentEnrollment
+        student_enrollments = StudentEnrollment.objects.filter(
+            class_obj=assessment.class_obj,
+            is_active=True
+        ).select_related('student').order_by('student__first_name', 'student__last_name')
+
+        students = []
+        graded_count = 0
+
+        for se in student_enrollments:
+            student = se.student
+            # Check if grade exists for this assessment
+            grade = Grade.objects.filter(
+                student=student,
+                subject=assessment.subject,
+                academic_session=assessment.academic_session,
+            ).filter(
+                assessment_type='exam' if assessment.category == 'examination' else 'test'
+            ).first()
+
+            has_score = grade is not None
+            if has_score:
+                graded_count += 1
+
+            students.append({
+                'student_id': student.id,
+                'student_name': student.get_full_name() or student.username,
+                'first_name': student.first_name,
+                'last_name': student.last_name,
+                'score': grade.score if grade else None,
+                'grade_id': grade.id if grade else None,
+                'percentage': grade.percentage if grade else None,
+                'grade_letter': grade.grade if grade else None,
+                'has_score': has_score,
+            })
+
+        return Response({
+            'assessment': AssessmentSerializer(assessment).data,
+            'students': students,
+            'total_students': len(students),
+            'graded_count': graded_count,
+        })
+
+    @action(detail=True, methods=['post'], url_path='bulk_save_scores')
+    def bulk_save_scores(self, request, pk=None):
+        """Bulk save/update scores for all students in an assessment"""
+        try:
+            assessment = self.get_object()
+        except Assessment.DoesNotExist:
+            return Response({'error': 'Assessment not found'}, status=404)
+
+        scores_data = request.data.get('scores', [])
+        results = []
+        errors = []
+
+        for item in scores_data:
+            student_id = item.get('student_id')
+            score = item.get('score')
+
+            if not student_id or score is None:
+                errors.append({'student_id': student_id, 'error': 'student_id and score required'})
+                continue
+
+            try:
+                student_id = int(student_id)
+                score_val = float(score)
+            except (ValueError, TypeError):
+                errors.append({'student_id': student_id, 'error': 'Invalid student_id or score'})
+                continue
+
+            # Check student belongs to this class
+            from apps.academics.models import StudentClass as StudentEnrollment
+            enrolled = StudentEnrollment.objects.filter(
+                student_id=student_id,
+                class_obj=assessment.class_obj,
+                is_active=True
+            ).exists()
+
+            if not enrolled:
+                errors.append({'student_id': student_id, 'error': 'Student not in class'})
+                continue
+
+            # Create or update grade
+            assessment_type = 'exam' if assessment.category == 'examination' else 'test'
+            
+            try:
+                grade, created = Grade.objects.update_or_create(
+                    student_id=student_id,
+                    subject=assessment.subject,
+                    academic_session=assessment.academic_session,
+                    assessment_type=assessment_type,
+                    defaults={
+                        'score': score_val,
+                        'max_score': assessment.total_marks,
+                    }
+                )
+                results.append({
+                    'student_id': student_id,
+                    'grade_id': grade.id,
+                    'score': score_val,
+                    'percentage': grade.percentage,
+                    'grade': grade.grade,
+                    'was_created': created,
+                })
+            except Exception as e:
+                errors.append({'student_id': student_id, 'error': str(e)})
+
+        return Response({
+            'assessment_id': assessment.id,
+            'assessment_title': assessment.title,
+            'results': results,
+            'errors': errors,
+            'success_count': len(results),
+            'error_count': len(errors),
+        })
+
+    @action(detail=False, methods=['get'])
+    def compute_results(self, request):
+        """Compute final scores with grades, remarks, and positions for a class/subject"""
+        class_id = request.query_params.get('class_id')
+        subject_id = request.query_params.get('subject_id')
+        academic_session_id = request.query_params.get('academic_session_id')
+        term = request.query_params.get('term')
+
+        if not class_id or not subject_id:
+            return Response({'error': 'class_id and subject_id required'}, status=400)
+
+        try:
+            class_id = int(class_id)
+            subject_id = int(subject_id)
+        except ValueError:
+            return Response({'error': 'Invalid parameters'}, status=400)
+
+        school_id = get_school_filter(request.user)
+
+        # Get students in class
+        from apps.academics.models import StudentClass as StudentEnrollment
+        enrollments = StudentEnrollment.objects.filter(
+            class_obj_id=class_id,
+            is_active=True
+        ).select_related('student').order_by('student__first_name', 'student__last_name')
+
+        # Get grading policies for this session
+        grading_policies = GradingPolicy.objects.none()
+        if academic_session_id:
+            grading_policies = GradingPolicy.objects.filter(
+                school_id=school_id,
+                academic_session_id=academic_session_id,
+                is_active=True
+            )
+
+        results = []
+        for enrollment in enrollments:
+            student = enrollment.student
+
+            # Sum of all CA grade percentages
+            ca_grades = Grade.objects.filter(
+                student=student,
+                subject_id=subject_id,
+                assessment_type__in=['test', 'quiz', 'assignment', 'continuous'],
+                is_locked=True,
+            )
+            if academic_session_id:
+                ca_grades = ca_grades.filter(academic_session_id=academic_session_id)
+            
+            ca_total = ca_grades.aggregate(total=models.Sum('percentage'))['total'] or 0
+
+            # Exam grade
+            exam_grades = Grade.objects.filter(
+                student=student,
+                subject_id=subject_id,
+                assessment_type='exam',
+                is_locked=True,
+            )
+            if academic_session_id:
+                exam_grades = exam_grades.filter(academic_session_id=academic_session_id)
+            
+            exam_total = exam_grades.aggregate(total=models.Sum('percentage'))['total'] or 0
+            exam_count = exam_grades.count()
+            exam_avg = exam_total / exam_count if exam_count > 0 else 0
+
+            # Final = CA + Exam (simple sum)
+            final_score = ca_total + exam_avg
+
+            # Determine grade
+            grade_letter = 'F'
+            if final_score >= 90: grade_letter = 'A'
+            elif final_score >= 80: grade_letter = 'B'
+            elif final_score >= 70: grade_letter = 'C'
+            elif final_score >= 60: grade_letter = 'D'
+
+            remark = _get_remark_for_grade(grade_letter)
+
+            results.append({
+                'student_id': student.id,
+                'student_name': student.get_full_name() or student.username,

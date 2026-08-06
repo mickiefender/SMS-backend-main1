@@ -3,7 +3,8 @@ from apps.academics.models import (
     Faculty, Department, Level, Subject, Class,
     ClassSubject, Enrollment, Timetable, AcademicCalendarEvent,
     Exam, ExamResult, SchoolFees, SchoolEvent, Document, Notice, UserProfilePicture,
-    ClassTeacher, StudentClass, ClassSubjectTeacher, Syllabus, SyllabusTopic
+    ClassTeacher, StudentClass, ClassSubjectTeacher, Syllabus, SyllabusTopic,
+    AssessmentType
 )
 
 @admin.register(Faculty)
@@ -110,3 +111,10 @@ class SyllabusAdmin(admin.ModelAdmin):
 class SyllabusTopicAdmin(admin.ModelAdmin):
     list_display = ('title', 'syllabus', 'order', 'created_at')
     search_fields = ('title', 'syllabus__title')
+
+
+@admin.register(AssessmentType)
+class AssessmentTypeAdmin(admin.ModelAdmin):
+    list_display = ('name', 'category', 'weight_percentage', 'academic_session', 'school', 'is_active')
+    list_filter = ('category', 'is_active', 'school')
+    search_fields = ('name', 'school__name', 'academic_session__name')

@@ -1,0 +1,45 @@
+                'student_name': student.get_full_name() or student.username,
+                'ca_score': round(ca_total, 2),
+                'exam_score': round(exam_avg, 2),
+                'exam_max': 100,
+                'exam_percentage': round(exam_avg, 2),
+                'final_score': round(final_score, 2),
+                'percentage': round(final_score, 2),
+                'grade': grade_letter,
+                'remark': remark,
+                'position': 0,  # Will be assigned after sorting
+            })
+
+        # Sort and assign positions
+        results.sort(key=lambda r: (-r['final_score'], r['student_name']))
+        for idx, r in enumerate(results, start=1):
+            r['position'] = idx
+
+        summary = {
+            'highest_score': max((r['final_score'] for r in results), default=0),
+            'lowest_score': min((r['final_score'] for r in results), default=0),
+            'average_score': sum(r['final_score'] for r in results) / len(results) if results else 0,
+        }
+
+        return Response({
+            'class_id': class_id,
+            'subject_id': subject_id,
+            'academic_session_id': academic_session_id,
+            'term': term,
+            'results': results,
+            'total_students': len(results),
+            'summary': summary,
+        })
+
+
+def _get_remark_for_grade(grade):
+    """Get remark text for a grade"""
+    remarks = {
+        'A': 'Excellent',
+        'B': 'Very Good',
+        'C': 'Good',
+        'D': 'Fair',
+        'E': 'Poor',
+        'F': 'Fail',
+    }
+    return remarks.get(grade, '')

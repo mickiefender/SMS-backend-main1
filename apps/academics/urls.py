@@ -8,7 +8,7 @@ from apps.academics.views import (
     ClassTeacherViewSet, StudentClassViewSet, ClassSubjectTeacherViewSet,
     AcademicSessionViewSet, TerminalReportViewSet, GradingPolicyViewSet,
     TerminalReportTemplateViewSet, AssessmentViewSet,
-    GradingScaleViewSet, GradingAssessmentViewSet
+    GradingScaleViewSet, GradingAssessmentViewSet, AssessmentTypeViewSet
 )
 from apps.academics.views_documents import DocumentViewSet, DocumentFolderViewSet
 
@@ -40,6 +40,7 @@ router.register(r'terminal-report-templates', TerminalReportTemplateViewSet, bas
 router.register(r'assessments', AssessmentViewSet, basename='assessment')
 router.register(r'grading-scales', GradingScaleViewSet, basename='grading-scale')
 router.register(r'grading-assessments', GradingAssessmentViewSet, basename='grading-assessment')
+router.register(r'assessment-types', AssessmentTypeViewSet, basename='assessment-type')
 
 urlpatterns = [
     path('', include(router.urls)),
