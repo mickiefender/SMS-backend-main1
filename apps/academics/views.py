@@ -1109,7 +1109,25 @@ class ClassSubjectTeacherViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated()]
 
     def get_queryset(self):
-        school_id = get_school_filter(self.request.user)
+        user = self.request.user
+
+        # Teachers: restrict to their own subject assignments. When a teacher
+        # is also a form tutor, they may use any of the class's subjects
+        # (this matches the `my_class_subjects` endpoint's form-tutor fallback).
+        if user.role == 'teacher' and self.request.query_params.get('for_teacher') == 'true':
+            from apps.academics.models import ClassTeacher
+            # Classes where the teacher is a form tutor
+            form_tutor_class_ids = list(ClassTeacher.objects.filter(
+                teacher=user,
+                is_form_tutor=True,
+            ).values_list('class_obj_id', flat=True))
+
+            return self.queryset.filter(
+                models.Q(teacher=user) |
+                models.Q(class_obj_id__in=form_tutor_class_ids)
+            )
+
+        school_id = get_school_filter(user)
         if school_id is None:
             return self.queryset.all()
         return self.queryset.filter(class_obj__school_id=school_id)

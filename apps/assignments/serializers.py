@@ -9,6 +9,8 @@ class AssignmentSerializer(serializers.ModelSerializer):
     subject_name = serializers.CharField(source='subject.name', read_only=True)
     class_name = serializers.CharField(source='class_obj.name', read_only=True)
     submission = serializers.SerializerMethodField(read_only=True)
+    submission_count = serializers.SerializerMethodField(read_only=True)
+    graded_count = serializers.SerializerMethodField(read_only=True)
     
     class_obj = serializers.PrimaryKeyRelatedField(queryset=Class.objects.all())
     subject = serializers.PrimaryKeyRelatedField(queryset=Subject.objects.all())
@@ -17,8 +19,14 @@ class AssignmentSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Assignment
-        fields = ['id', 'class_obj', 'subject', 'teacher', 'teacher_name', 'subject_name', 'class_name', 'title', 'description', 'file', 'due_date', 'created_at', 'updated_at', 'submission']
-        read_only_fields = ['teacher_name', 'subject_name', 'class_name', 'created_at', 'updated_at', 'submission']
+        fields = ['id', 'class_obj', 'subject', 'teacher', 'teacher_name', 'subject_name', 'class_name', 'title', 'description', 'file', 'due_date', 'created_at', 'updated_at', 'submission', 'submission_count', 'graded_count']
+        read_only_fields = ['teacher_name', 'subject_name', 'class_name', 'created_at', 'updated_at', 'submission', 'submission_count', 'graded_count']
+    
+    def get_submission_count(self, obj):
+        return obj.submissions.count()
+    
+    def get_graded_count(self, obj):
+        return obj.submissions.filter(status='graded').count()
     
     def get_submission(self, obj):
         user = self.context.get('user')

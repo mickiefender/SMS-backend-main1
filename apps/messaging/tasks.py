@@ -207,6 +207,69 @@ def send_assignment_email(assignment_id):
 
 
 @shared_task
+def send_assignment_submission_email(submission_id):
+    """Send an email to a student when their assignment has been marked
+    as submitted (typically by a teacher)."""
+    try:
+        from apps.assignments.models import AssignmentSubmission
+
+        submission = AssignmentSubmission.objects.select_related(
+            'assignment__class_obj__school',
+            'assignment__subject',
+            'assignment__teacher',
+            'student',
+        ).get(id=submission_id)
+
+        student = submission.student
+        if not student.email:
+            return f"No email for student {student.id} on submission {submission_id}"
+
+        assignment = submission.assignment
+        school = assignment.class_obj.school
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+
+        context = {
+            'title': assignment.title,
+            'description': assignment.description or 'No description provided.',
+            'due_date': assignment.due_date,
+            'class_name': assignment.class_obj.name,
+            'subject_name': assignment.subject.name,
+            'teacher_name': assignment.teacher.get_full_name() if assignment.teacher_id else 'Your teacher',
+            'student_name': student.get_full_name() or student.username,
+            'school_name': school.name,
+            'logo_url': school.get_logo_url() if hasattr(school, 'get_logo_url') else '',
+            'frontend_url': frontend_url,
+            'assignment_link': f"{frontend_url}/dashboard/student/assignments",
+        }
+
+        html_message = render_to_string('emails/assignment_submitted.html', context)
+        subject = f'Assignment Submitted: {assignment.title}'
+        recipient_emails = [student.email]
+
+        if resend and os.environ.get("RESEND_API_KEY") and not IS_DEVELOPMENT:
+            try:
+                resend.Emails.send({
+                    "from": f"School Management <assignments@{RESEND_DOMAIN}>",
+                    "to": recipient_emails,
+                    "subject": subject,
+                    "html": html_message,
+                    "reply_to": os.environ.get("REPLY_TO_EMAIL", "noreply@schoolmanagement.edu"),
+                })
+                return f"Submission email sent to {student.email} via Resend"
+            except Exception as e:
+                print(f"[Submission] Resend error, fallback: {e}")
+                return send_via_django(subject, html_message, recipient_emails, is_assignment=True)
+        else:
+            return send_via_django(subject, html_message, recipient_emails, is_assignment=True)
+
+    except AssignmentSubmission.DoesNotExist:
+        return f"AssignmentSubmission {submission_id} not found"
+    except Exception as e:
+        print(f"[Submission Email] Error: {e}")
+        return f"Error sending submission email: {str(e)}"
+
+
+@shared_task
 def send_realtime_notification(notification_type, user_id, title, message, data=None):
     """
     Send real-time notification via Redis pub/sub
@@ -394,4 +457,3 @@ def send_personal_notice_email(personal_notice_id):
     except Exception as e:
         print(f"[PERSONAL NOTICE] Error: {e}")
         return f"Error sending personal notice: {str(e)}"
-

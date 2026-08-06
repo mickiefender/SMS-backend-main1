@@ -1,3 +1,4 @@
+from django.contrib.auth import get_user_model
 from apps.academics.models import StudentClass
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -8,6 +9,8 @@ from core.permissions import IsTeacher, IsStudent
 from apps.assignments.models import Assignment, AssignmentSubmission
 from apps.assignments.serializers import AssignmentSerializer, AssignmentSubmissionSerializer
 from rest_framework import serializers
+
+User = get_user_model()
 
 
 class AssignmentViewSet(viewsets.ModelViewSet):
@@ -91,7 +94,7 @@ class AssignmentSubmissionViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == 'create':
             return [IsAuthenticated(), IsStudent()]
-        if self.action == 'grade':
+        if self.action in ['grade', 'toggle']:
             return [IsAuthenticated(), IsTeacher()]
         return [IsAuthenticated()]
 
@@ -104,6 +107,34 @@ class AssignmentSubmissionViewSet(viewsets.ModelViewSet):
         elif user.role == 'teacher':
             return AssignmentSubmission.objects.filter(assignment__teacher=user)
         return AssignmentSubmission.objects.filter(assignment__class_obj__school=user.school)
+
+    def _send_submitted_notifications(self, submission):
+        """Send email + in-app + FCM push notification to the student
+        when a teacher marks their assignment as submitted."""
+        try:
+            from apps.messaging.tasks import send_assignment_submission_email
+            send_assignment_submission_email.delay(submission.id)
+        except Exception as e:
+            print(f"[Submission] Failed to queue submission email: {e}")
+
+        try:
+            from apps.notifications.services.notification_service import (
+                send_notification,
+                CATEGORY_ASSIGNMENT,
+            )
+            send_notification(
+                recipient=submission.student,
+                notification_type='assignment',
+                category=CATEGORY_ASSIGNMENT,
+                title='Assignment Submitted',
+                message=f'Your teacher marked "{submission.assignment.title}" as submitted.',
+                target_screen='assignment_view',
+                target_id=str(submission.assignment_id),
+                priority='normal',
+                extra_data={'assignment_id': str(submission.assignment_id)},
+            )
+        except Exception as e:
+            print(f"[Submission] Failed to send push notification: {e}")
 
     def perform_create(self, serializer):
         print(f"[DEBUG] perform_create called - validated_data: {serializer.validated_data}")
@@ -121,6 +152,75 @@ class AssignmentSubmissionViewSet(viewsets.ModelViewSet):
             )
         submission = serializer.save(student=self.request.user, status='submitted')
         print(f"[DEBUG] Submission created with ID: {submission.id}")
+
+        # Student self-submission also notifies the student
+        self._send_submitted_notifications(submission)
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsTeacher])
+    def toggle(self, request):
+        """
+        Teacher marks a student's assignment as submitted / not submitted.
+        Body: { assignment_id, student_id, submitted: bool }
+
+        - submitted=true  → creates a submission record (if none) + sends
+                            email, in-app and FCM push to the student.
+        - submitted=false → deletes the teacher-marked submission (if the
+                            student did not submit it themselves).
+        """
+        assignment_id = request.data.get('assignment_id')
+        student_id = request.data.get('student_id')
+        submitted = request.data.get('submitted')
+
+        if submitted is None:
+            return Response(
+                {'detail': 'submitted is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            assignment = Assignment.objects.get(id=assignment_id)
+            student = User.objects.get(id=student_id, role='student')
+        except (Assignment.DoesNotExist, User.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {'detail': 'Invalid assignment_id or student_id'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Only the assignment's teacher (or a school admin) may toggle
+        if request.user.role != 'school_admin' and assignment.teacher_id != request.user.id:
+            return Response(
+                {'detail': 'You are not the teacher for this assignment'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        existing = AssignmentSubmission.objects.filter(
+            assignment=assignment,
+            student=student,
+        ).first()
+
+        if submitted:
+            if existing:
+                # Already marked — just return current state
+                return Response({'submitted': True, 'created': False})
+            submission = AssignmentSubmission.objects.create(
+                assignment=assignment,
+                student=student,
+                text_submission='',
+                status='submitted',
+            )
+            self._send_submitted_notifications(submission)
+            return Response(
+                {'submitted': True, 'created': True, 'submission_id': submission.id},
+                status=status.HTTP_201_CREATED,
+            )
+
+        # submitted == False: only remove teacher-created (empty text) rows so
+        # a student's genuine submission is never deleted.
+        if existing and not existing.text_submission and not existing.file:
+            existing.delete()
+            return Response({'submitted': False, 'deleted': True})
+
+        return Response({'submitted': False, 'deleted': False})
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsTeacher])
     def grade(self, request, pk=None):
