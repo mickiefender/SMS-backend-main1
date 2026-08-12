@@ -238,8 +238,13 @@ REST_FRAMEWORK = {
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': True,
+    # Rotation + blacklisting is disabled because
+    # `rest_framework_simplejwt.token_blacklist` is not installed. With
+    # ROTATE_REFRESH_TOKENS=True and no blacklist app, the refresh endpoint
+    # crashes trying to blacklist the old token. The mobile client keeps the
+    # same refresh token for its full 7-day lifetime, which is safe.
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': False,
     'ALGORITHM': 'HS256',
     'SIGNING_KEY': SECRET_KEY,
 }

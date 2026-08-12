@@ -4,6 +4,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView
 from .notifications_api import StudentNotificationViewSet
 
 # Create router for notifications
@@ -12,6 +13,9 @@ router.register(r'notifications', StudentNotificationViewSet, basename='notifica
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # JWT token refresh — lets the mobile client silently renew an expired
+    # access token using the stored refresh token (SimpleJWT standard view).
+    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/users/', include('apps.users.urls')),
     path('api/schools/', include('apps.schools.urls')),
     path('api/academics/', include('apps.academics.urls')),
