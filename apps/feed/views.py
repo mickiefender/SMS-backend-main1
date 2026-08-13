@@ -393,12 +393,14 @@ class FeedCommentViewSet(viewsets.ModelViewSet):
       POST /api/feed/lesson/{id}/comment/
     """
     pagination_class = CommentCursorPagination
+    filter_backends = []
 
     def get_queryset(self):
         lesson_id = self.kwargs.get('lesson_id') or self.request.query_params.get('lesson_id')
         if lesson_id:
             return models.FeedComment.objects.filter(
-                lesson_id=lesson_id, parent__isnull=True
+                lesson_id=lesson_id,
+                parent__isnull=True
             ).prefetch_related('replies')
         return models.FeedComment.objects.none()
 
