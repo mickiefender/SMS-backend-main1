@@ -19,5 +19,8 @@ class TrendingCursorPagination(CursorPagination):
 
 class CommentCursorPagination(CursorPagination):
     page_size = 20
-    ordering = '-is_pinned', '-created_at'
+    # NOTE: must be a string (CursorPagination requires a single ordering
+    # expression). `is_pinned` is a boolean and cannot be used with cursor
+    # pagination, so order by creation time (newest first).
+    ordering = '-created_at'
     cursor_query_param = 'cursor'
