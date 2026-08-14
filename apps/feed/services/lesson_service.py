@@ -58,6 +58,11 @@ class LessonService:
         status = validated_data.get('status', 'pending_review')
         visibility = validated_data.get('visibility', 'public')
 
+        # Default the school to the teacher's school when the client does not
+        # provide one (the mobile app has no school picker on upload).
+        if not validated_data.get('school'):
+            validated_data['school'] = teacher.school
+
         if status == 'approved' and visibility == 'public':
             validated_data['published_at'] = timezone.now()
 

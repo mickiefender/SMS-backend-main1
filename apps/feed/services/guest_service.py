@@ -90,7 +90,13 @@ class GuestService:
         device_id: str,
         strategy: str = 'guest_personalized',
     ):
-        """Return lessons matching the guest's academic level, class, and subjects."""
+        """Return lessons matching the guest's academic level, class, and subjects.
+
+        Falls back to progressively wider audiences so guests never see an
+        empty feed when there are no published lessons for their exact
+        level/class/subject combination:
+          level+class+subject → level+class → level → subject → trending
+        """
         try:
             learner = GuestLearner.objects.get(device_id=device_id)
         except GuestLearner.DoesNotExist:
@@ -100,19 +106,50 @@ class GuestService:
         class_id = learner.class_obj_id
         subject_ids = learner.subject_ids or []
 
-        qs = RecommendationService._base_public_queryset()
+        base = RecommendationService._base_public_queryset()
 
-        if level_id:
-            qs = qs.filter(level_id=level_id)
-        if class_id:
-            qs = qs.filter(class_obj_id=class_id)
-        if subject_ids:
-            qs = qs.filter(subject_id__in=subject_ids)
+        def _personalized(level=None, cls=None, subjects=None):
+            qs = base
+            if level:
+                qs = qs.filter(level_id=level)
+            if cls:
+                qs = qs.filter(class_obj_id=cls)
+            if subjects:
+                qs = qs.filter(subject_id__in=subjects)
+            return qs
+
+        # Progressive relaxation: pick the most specific filter that has content.
+        candidates = None
+        if level_id and class_id and subject_ids:
+            candidate = _personalized(level_id, class_id, subject_ids)
+            if candidate.exists():
+                candidates = candidate
+        if candidates is None and level_id and class_id:
+            candidate = _personalized(level_id, class_id, None)
+            if candidate.exists():
+                candidates = candidate
+        if candidates is None and level_id and subject_ids:
+            candidate = _personalized(level_id, None, subject_ids)
+            if candidate.exists():
+                candidates = candidate
+        if candidates is None and level_id:
+            candidate = _personalized(level_id, None, None)
+            if candidate.exists():
+                candidates = candidate
+        if candidates is None and subject_ids:
+            candidate = _personalized(None, None, subject_ids)
+            if candidate.exists():
+                candidates = candidate
+
+        if candidates is None:
+            # No published lessons match the guest's preferences — show
+            # trending public content instead of an empty feed.
+            return RecommendationService.get_guest_recommendations(strategy='trending')
 
         from django.db.models import F
         from decimal import Decimal
 
-        qs = qs.annotate(
+        qs = candidates.annotate(
             rec_score=(
                 F('trending_score') * Decimal('0.5') +
                 RecommendationService._engagement_score() * Decimal('0.5')

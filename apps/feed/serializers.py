@@ -170,6 +170,33 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     )
     media_file = serializers.FileField(required=False, write_only=True)
     thumbnail_file = serializers.FileField(required=False, write_only=True)
+    school_id = serializers.PrimaryKeyRelatedField(
+        queryset=models.School.objects.all(),
+        required=False,
+        write_only=True,
+        source='school',
+    )
+    academic_level_id = serializers.PrimaryKeyRelatedField(
+        queryset=models.FeedAcademicLevel.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+        source='level',
+    )
+    academic_class_id = serializers.PrimaryKeyRelatedField(
+        queryset=models.FeedAcademicClass.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+        source='class_obj',
+    )
+    subject_id = serializers.PrimaryKeyRelatedField(
+        queryset=models.FeedSubject.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+        source='subject',
+    )
     content_type_id = serializers.IntegerField(required=False, allow_null=True)
     difficulty_level_id = serializers.IntegerField(required=False, allow_null=True)
     curriculum_id = serializers.IntegerField(required=False, allow_null=True)
@@ -188,8 +215,9 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.FeedLesson
         fields = [
-            'id', 'title', 'description', 'topic', 'school', 'level', 'class_obj',
-            'subject', 'tags', 'resources', 'media_file', 'thumbnail_file',
+            'id', 'title', 'description', 'topic',
+            'school_id', 'academic_level_id', 'academic_class_id', 'subject_id',
+            'tags', 'resources', 'media_file', 'thumbnail_file',
             'visibility', 'status',
             'duration_seconds', 'thumbnail_url', 'poster_url', 'extra_metadata',
             'content_type_id', 'difficulty_level_id', 'curriculum_id',
@@ -199,10 +227,12 @@ class LessonWriteSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
     def validate(self, attrs):
-        if attrs.get('class_obj') and attrs.get('level'):
-            if attrs['class_obj'].level_id != attrs['level'].id:
+        class_obj = attrs.get('class_obj')
+        level = attrs.get('level')
+        if class_obj and level:
+            if class_obj.level_id != level.id:
                 raise serializers.ValidationError(
-                    {'class_obj': 'Selected class does not belong to the selected level.'}
+                    {'academic_class_id': 'Selected class does not belong to the selected level.'}
                 )
         return attrs
 
