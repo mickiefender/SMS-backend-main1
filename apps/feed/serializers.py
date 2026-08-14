@@ -5,6 +5,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
 from apps.feed import models
+from apps.schools.models import School
 
 User = get_user_model()
 
@@ -171,7 +172,7 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     media_file = serializers.FileField(required=False, write_only=True)
     thumbnail_file = serializers.FileField(required=False, write_only=True)
     school_id = serializers.PrimaryKeyRelatedField(
-        queryset=models.School.objects.all(),
+        queryset=School.objects.all(),
         required=False,
         write_only=True,
         source='school',
