@@ -1,13 +1,25 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from apps.feed import views, guest_views, recommendation_views, views_direct_upload
+from apps.feed import admin_views, views, guest_views, recommendation_views, views_direct_upload
 
 router = DefaultRouter()
 router.register(r'lesson', views.FeedLessonViewSet, basename='feed-lesson')
 router.register(r'notifications', views.FeedNotificationViewSet, basename='feed-notification')
 router.register(r'reports', views.FeedReportViewSet, basename='feed-report')
 router.register(r'moderation', views.ModerationViewSet, basename='feed-moderation')
+
+# Super Admin lesson-metadata management (CRUD)
+admin_router = DefaultRouter()
+admin_router.register(r'academic-levels', admin_views.AdminAcademicLevelViewSet, basename='admin-academic-level')
+admin_router.register(r'academic-classes', admin_views.AdminAcademicClassViewSet, basename='admin-academic-class')
+admin_router.register(r'subjects', admin_views.AdminSubjectViewSet, basename='admin-subject')
+admin_router.register(r'content-types', admin_views.AdminContentTypeViewSet, basename='admin-content-type')
+admin_router.register(r'difficulty-levels', admin_views.AdminDifficultyLevelViewSet, basename='admin-difficulty-level')
+admin_router.register(r'curricula', admin_views.AdminCurriculumViewSet, basename='admin-curriculum')
+admin_router.register(r'learning-objectives', admin_views.AdminLearningObjectiveViewSet, basename='admin-learning-objective')
+admin_router.register(r'tags', admin_views.AdminTagViewSet, basename='admin-tag')
+admin_router.register(r'visibility-scopes', admin_views.AdminVisibilityScopeViewSet, basename='admin-visibility-scope')
 
 # Comments nested under lessons
 comment_list = views.FeedCommentViewSet.as_view({
@@ -40,6 +52,12 @@ urlpatterns = [
     path('reference/classes/', views.ReferenceClassesView.as_view(), name='feed-classes'),
     path('reference/subjects/', views.ReferenceSubjectsView.as_view(), name='feed-subjects'),
     path('reference/tags/', views.ReferenceTagsView.as_view(), name='feed-tags'),
+    path('reference/content-types/', views.ReferenceContentTypesView.as_view(), name='feed-content-types'),
+    path('reference/difficulty-levels/', views.ReferenceDifficultyLevelsView.as_view(), name='feed-difficulty-levels'),
+    path('reference/curricula/', views.ReferenceCurriculaView.as_view(), name='feed-curricula'),
+    path('reference/learning-objectives/', views.ReferenceLearningObjectivesView.as_view(), name='feed-learning-objectives'),
+    path('reference/visibility-scopes/', views.ReferenceVisibilityScopesView.as_view(), name='feed-visibility-scopes'),
+    path('admin/', include(admin_router.urls)),
 
     # Guest (unauthenticated learner) endpoints
     path('guest/onboard/', guest_views.GuestOnboardView.as_view(), name='guest-onboard'),

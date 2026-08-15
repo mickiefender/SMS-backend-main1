@@ -648,3 +648,48 @@ class ReferenceTagsView(APIView):
         qs = models.FeedTag.objects.all()
         serializer = serializers.FeedTagSerializer(qs, many=True)
         return Response(serializer.data)
+
+
+class ReferenceContentTypesView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        qs = models.FeedContentType.objects.filter(is_active=True)
+        serializer = serializers.FeedContentTypeSerializer(qs, many=True)
+        return Response(serializer.data)
+
+
+class ReferenceDifficultyLevelsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        qs = models.FeedDifficultyLevel.objects.filter(is_active=True)
+        serializer = serializers.FeedDifficultyLevelSerializer(qs, many=True)
+        return Response(serializer.data)
+
+
+class ReferenceCurriculaView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        qs = models.FeedCurriculum.objects.filter(is_active=True)
+        serializer = serializers.FeedCurriculumSerializer(qs, many=True)
+        return Response(serializer.data)
+
+
+class ReferenceLearningObjectivesView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        qs = models.FeedLearningObjective.objects.filter(is_active=True)
+        serializer = serializers.FeedLearningObjectiveSerializer(qs, many=True)
+        return Response(serializer.data)
+
+
+class ReferenceVisibilityScopesView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        qs = models.FeedVisibilityScope.objects.all()
+        serializer = serializers.FeedVisibilityScopeSerializer(qs, many=True)
+        return Response(serializer.data)

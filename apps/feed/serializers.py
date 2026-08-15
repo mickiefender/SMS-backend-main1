@@ -14,26 +14,71 @@ class FeedAcademicLevelSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.FeedAcademicLevel
         fields = ['id', 'name', 'slug', 'order', 'is_active']
+        extra_kwargs = {'slug': {'required': False}}
 
 
 class FeedAcademicClassSerializer(serializers.ModelSerializer):
     level = FeedAcademicLevelSerializer(read_only=True)
+    level_id = serializers.PrimaryKeyRelatedField(
+        queryset=models.FeedAcademicLevel.objects.all(),
+        write_only=True,
+        required=False,
+        source='level',
+    )
 
     class Meta:
         model = models.FeedAcademicClass
-        fields = ['id', 'name', 'slug', 'level', 'order', 'is_active']
+        fields = ['id', 'name', 'slug', 'level', 'level_id', 'order', 'is_active']
+        extra_kwargs = {'slug': {'required': False}}
 
 
 class FeedSubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.FeedSubject
         fields = ['id', 'name', 'slug', 'is_active']
+        extra_kwargs = {'slug': {'required': False}}
+
+
+class FeedContentTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.FeedContentType
+        fields = ['id', 'name', 'slug', 'is_active']
+        extra_kwargs = {'slug': {'required': False}}
+
+
+class FeedDifficultyLevelSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.FeedDifficultyLevel
+        fields = ['id', 'name', 'slug', 'order', 'is_active']
+        extra_kwargs = {'slug': {'required': False}}
+
+
+class FeedCurriculumSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.FeedCurriculum
+        fields = ['id', 'name', 'slug', 'is_active']
+        extra_kwargs = {'slug': {'required': False}}
+
+
+class FeedLearningObjectiveSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.FeedLearningObjective
+        fields = ['id', 'name', 'slug', 'is_active']
+        extra_kwargs = {'slug': {'required': False}}
 
 
 class FeedTagSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.FeedTag
         fields = ['id', 'name', 'slug', 'usage_count']
+        extra_kwargs = {'slug': {'required': False}, 'usage_count': {'read_only': True}}
+
+
+class FeedVisibilityScopeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.FeedVisibilityScope
+        fields = ['id', 'name', 'slug', 'description']
+        extra_kwargs = {'slug': {'required': False}}
 
 
 class LessonResourceSerializer(serializers.ModelSerializer):
@@ -198,10 +243,34 @@ class LessonWriteSerializer(serializers.ModelSerializer):
         write_only=True,
         source='subject',
     )
-    content_type_id = serializers.IntegerField(required=False, allow_null=True)
-    difficulty_level_id = serializers.IntegerField(required=False, allow_null=True)
-    curriculum_id = serializers.IntegerField(required=False, allow_null=True)
-    learning_objective_id = serializers.IntegerField(required=False, allow_null=True)
+    content_type_id = serializers.PrimaryKeyRelatedField(
+        queryset=models.FeedContentType.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+        source='content_type',
+    )
+    difficulty_level_id = serializers.PrimaryKeyRelatedField(
+        queryset=models.FeedDifficultyLevel.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+        source='difficulty_level',
+    )
+    curriculum_id = serializers.PrimaryKeyRelatedField(
+        queryset=models.FeedCurriculum.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+        source='curriculum',
+    )
+    learning_objective_id = serializers.PrimaryKeyRelatedField(
+        queryset=models.FeedLearningObjective.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+        source='learning_objective',
+    )
     keywords = serializers.ListField(
         child=serializers.CharField(max_length=100), required=False, allow_empty=True
     )
