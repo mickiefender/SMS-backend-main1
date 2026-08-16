@@ -1345,10 +1345,26 @@ class TerminalReportViewSet(viewsets.ModelViewSet):
                     'subject_total_students': ss.subject_total_students,
                 })
 
+            profile_picture = None
+            try:
+                profile_pic = getattr(report.student, 'profile_picture', None)
+                if profile_pic:
+                    profile_picture = profile_pic.display_url
+            except Exception:
+                pass
+            school_logo = None
+            try:
+                if report.student and report.student.school:
+                    school_logo = report.student.school.get_logo_url()
+            except Exception:
+                pass
+
             results.append({
                 'id': report.id,
                 'student_id': report.student_id,
                 'student_name': report.student.get_full_name() or report.student.username,
+                'profile_picture': profile_picture,
+                'school_logo': school_logo,
                 'class_id': report.class_obj_id,
                 'class_name': report.class_obj.name if report.class_obj_id else None,
                 'session_id': report.academic_session_id,

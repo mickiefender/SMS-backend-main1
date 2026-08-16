@@ -193,6 +193,7 @@ class StudentProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     phone = serializers.CharField(source='user.phone', read_only=True)
     profile_picture_url = serializers.SerializerMethodField()
+    school_logo = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentProfile
@@ -202,7 +203,7 @@ class StudentProfileSerializer(serializers.ModelSerializer):
             'student_id', 'level', 'department', 'enrollment_date',
             'gender', 'father_name', 'mother_name', 'religion',
             'father_occupation', 'address', 'roll_number', 'date_of_birth',
-            'profile_picture_url',
+            'profile_picture_url', 'school_logo',
             'created_at',
         ]
         read_only_fields = [
@@ -241,3 +242,13 @@ class StudentProfileSerializer(serializers.ModelSerializer):
             pass
         # Fallback to profile_picture_url field on student profile
         return getattr(obj, 'profile_picture_url', None)
+
+    def get_school_logo(self, obj):
+        """Get the student's school logo URL (fallback avatar for students
+        without a profile picture)."""
+        try:
+            if obj.user and obj.user.school:
+                return obj.user.school.get_logo_url()
+        except Exception:
+            pass
+        return None
