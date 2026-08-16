@@ -299,11 +299,12 @@ class LessonWriteSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         class_obj = attrs.get('class_obj')
         level = attrs.get('level')
-        if class_obj and level:
-            if class_obj.level_id != level.id:
-                raise serializers.ValidationError(
-                    {'academic_class_id': 'Selected class does not belong to the selected level.'}
-                )
+        if class_obj and level and class_obj.level_id != level.id:
+            # The class is the more specific entity. Align the level to the
+            # class's level so a stale slug-based pairing (e.g. after the
+            # super admin re-orders the reference data) can never fail an
+            # otherwise valid upload.
+            attrs['level'] = class_obj.level if class_obj.level_id else None
         return attrs
 
 
@@ -336,6 +337,8 @@ class LearningProfileSerializer(serializers.ModelSerializer):
 
 class FeedCommentSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.get_full_name', read_only=True)
+    user_profile_picture = serializers.SerializerMethodField()
+    user_school_logo = serializers.SerializerMethodField()
     content = serializers.SerializerMethodField()
     lesson_id = serializers.IntegerField(read_only=True)
     user_id = serializers.IntegerField(read_only=True)
@@ -346,18 +349,38 @@ class FeedCommentSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.FeedComment
         fields = [
-            'id', 'lesson', 'lesson_id', 'user', 'user_id', 'user_name', 'parent',
-            'parent_comment_id', 'body', 'content', 'is_pinned', 'is_moderated',
-            'is_deleted', 'like_count', 'is_liked', 'replies_count', 'created_at', 'updated_at',
+            'id', 'lesson', 'lesson_id', 'user', 'user_id', 'user_name',
+            'user_profile_picture', 'user_school_logo',
+            'parent', 'parent_comment_id', 'body', 'content', 'is_pinned',
+            'is_moderated', 'is_deleted', 'like_count', 'is_liked',
+            'replies_count', 'created_at', 'updated_at',
         ]
         read_only_fields = [
             'id', 'lesson', 'lesson_id', 'user', 'user_id', 'user_name',
+            'user_profile_picture', 'user_school_logo',
             'parent', 'parent_comment_id', 'body', 'content', 'like_count', 'replies_count',
             'is_pinned', 'is_moderated', 'is_deleted', 'created_at', 'updated_at',
         ]
 
     def get_content(self, obj):
         return obj.body
+
+    def get_user_profile_picture(self, obj):
+        try:
+            profile_pic = getattr(obj.user, 'profile_picture', None)
+            if profile_pic:
+                return profile_pic.display_url
+        except Exception:
+            pass
+        return None
+
+    def get_user_school_logo(self, obj):
+        try:
+            if obj.user and obj.user.school:
+                return obj.user.school.get_logo_url()
+        except Exception:
+            pass
+        return None
 
     def get_is_liked(self, obj):
         user = self.context.get('request').user if self.context.get('request') else None

@@ -2063,11 +2063,27 @@ class GradingAssessmentViewSet(viewsets.ModelViewSet):
             if has_score:
                 graded_count += 1
 
+            profile_picture = None
+            try:
+                profile_pic = getattr(student, 'profile_picture', None)
+                if profile_pic:
+                    profile_picture = profile_pic.display_url
+            except Exception:
+                pass
+            school_logo = None
+            try:
+                if student.school:
+                    school_logo = student.school.get_logo_url()
+            except Exception:
+                pass
+
             students.append({
                 'student_id': student.id,
                 'student_name': student.get_full_name() or student.username,
                 'first_name': student.first_name,
                 'last_name': student.last_name,
+                'profile_picture': profile_picture,
+                'school_logo': school_logo,
                 'score': grade.score if grade else None,
                 'grade_id': grade.id if grade else None,
                 'percentage': grade.percentage if grade else None,
@@ -2258,9 +2274,25 @@ class GradingAssessmentViewSet(viewsets.ModelViewSet):
 
             remark = _get_remark_for_grade(grade_letter)
 
+            profile_picture = None
+            try:
+                profile_pic = getattr(student, 'profile_picture', None)
+                if profile_pic:
+                    profile_picture = profile_pic.display_url
+            except Exception:
+                pass
+            school_logo = None
+            try:
+                if student.school:
+                    school_logo = student.school.get_logo_url()
+            except Exception:
+                pass
+
             results.append({
                 'student_id': student.id,
                 'student_name': student.get_full_name() or student.username,
+                'profile_picture': profile_picture,
+                'school_logo': school_logo,
                 'ca_score': round(ca_total, 2),
                 'exam_score': round(exam_avg, 2),
                 'exam_max': 100,
