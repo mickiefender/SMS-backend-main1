@@ -36,7 +36,7 @@ class IsSchoolAdminOrHigher(permissions.BasePermission):
 
 class IsSchoolAdminOrSelf(permissions.BasePermission):
     """
-    Allows school admins (higher) or users uploading for themselves
+    Allows school admins (higher) or users uploading for themselves.
     """
     def has_object_permission(self, request, view, obj):
         return (
@@ -47,9 +47,13 @@ class IsSchoolAdminOrSelf(permissions.BasePermission):
     def has_permission(self, request, view):
         if request.user.role in ['super_admin', 'school_admin']:
             return True
-        # For self-upload, check if data targets self
+        # Read always allowed for authenticated users.
         if getattr(request, 'method', '') in permissions.SAFE_METHODS:
-            return True  # Read always allowed for authenticated
+            return True
+        # A non-admin may only upload/edit for themselves. When no 'user'
+        # field is supplied the view targets request.user (self-upload), so
+        # that is allowed too. If a 'user' field IS present it must match.
+        if request.data is None:
+            return True
         user_id = request.data.get('user')
-        return user_id == request.user.id
-
+        return user_id is None or str(user_id) == str(request.user.id)
