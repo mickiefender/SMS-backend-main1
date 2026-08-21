@@ -6,10 +6,12 @@ from django.db.models import Count, Sum, Q
 from django.utils import timezone
 from datetime import timedelta
 from core.permissions import IsSuperAdmin, IsSchoolAdminOrHigher
-from core.cache import DashboardCache
+from core.cache import DashboardCache, CACHE_KEYS, CACHE_TTL, cache
 from apps.schools.models import School, Plan, Subscription, Announcement
 from apps.schools.serializers import SchoolSerializer, PlanSerializer, SubscriptionSerializer, AnnouncementSerializer
 from apps.users.models import User
+
+
 
 
 class PlanViewSet(viewsets.ModelViewSet):
@@ -113,34 +115,88 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsSuperAdmin])
     def super_admin_usage(self, request):
+        """Aggregated usage across all schools.
+
+        Previously this issued 3 queries PER school (4N+1 total). It now does
+        the whole thing with one query per school in a single pass using
+        GROUP BY aggregations.
+        """
         from apps.billing.models import OnlinePayment, ManualPayment
 
-        schools = School.objects.select_related('plan').all()
+        cache_key = CACHE_KEYS['super_admin_usage']
+        try:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return Response({'results': cached})
+        except Exception:
+            pass
+
+        # All counts in one grouped query: students & teachers per school
+        user_stats = (
+            User.objects.filter(role__in=['student', 'teacher'])
+            .values('school_id', 'role')
+            .annotate(total=Count('id'))
+        )
+        counts = {}
+        for row in user_stats:
+            school_id = row['school_id']
+            bucket = counts.setdefault(school_id, {'students': 0, 'teachers': 0})
+            bucket[row['role']] = row['total']
+
+        # Revenue per school from both payment sources in one query each
+        manual_rev = (
+            ManualPayment.objects.values('school_id')
+            .annotate(total=Sum('amount'))
+        )
+        manual_map = {r['school_id']: float(r['total'] or 0) for r in manual_rev}
+        online_rev = (
+            OnlinePayment.objects.filter(status='success')
+            .values('school_id')
+            .annotate(total=Sum('amount'))
+        )
+        online_map = {r['school_id']: float(r['total'] or 0) for r in online_rev}
+
+        schools = School.objects.select_related('plan').only(
+            'id', 'name', 'status', 'plan__name'
+        )
         data = []
         for school in schools:
-            students_count = User.objects.filter(school=school, role='student').count()
-            teachers_count = User.objects.filter(school=school, role='teacher').count()
-            storage_used_mb = 0
-            total_revenue = (
-                (ManualPayment.objects.filter(school=school).aggregate(total=Sum('amount'))['total'] or 0) +
-                (OnlinePayment.objects.filter(school=school, status='success').aggregate(total=Sum('amount'))['total'] or 0)
-            )
+            sc = counts.get(school.id, {'students': 0, 'teachers': 0})
             data.append({
                 'school_id': school.id,
                 'school_name': school.name,
                 'plan': school.plan.name if school.plan else None,
-                'students': students_count,
-                'teachers': teachers_count,
-                'storage_used_mb': float(storage_used_mb),
-                'revenue': float(total_revenue),
+                'students': sc['students'],
+                'teachers': sc['teachers'],
+                'storage_used_mb': 0,
+                'revenue': manual_map.get(school.id, 0) + online_map.get(school.id, 0),
                 'status': school.status,
             })
+
+        try:
+            cache.set(cache_key, data, CACHE_TTL['super_admin_usage'])
+        except Exception:
+            pass
 
         return Response({'results': data})
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsSuperAdmin])
     def super_admin_analytics(self, request):
+        """Platform-wide analytics.
+
+        The original implementation issued ~6 queries per monthly bucket +
+        ~8 top-level queries (≈44 queries). This version issues a handful of
+        grouped queries and caches the result for 10 minutes.
+        """
         from apps.billing.models import OnlinePayment, ManualPayment
+
+        cache_key = CACHE_KEYS['super_admin_analytics']
+        try:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return Response(cached)
+        except Exception:
+            pass
 
         now = timezone.now()
         last_30_days = now - timedelta(days=30)
@@ -152,37 +208,84 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
         manual_total = ManualPayment.objects.aggregate(total=Sum('amount'))['total'] or 0
         online_total = OnlinePayment.objects.filter(status='success').aggregate(total=Sum('amount'))['total'] or 0
-        revenue_total = manual_total + online_total
+        revenue_total = float(manual_total + online_total)
 
         new_schools_30 = School.objects.filter(created_at__gte=last_30_days).count()
         new_users_30 = User.objects.filter(created_at__gte=last_30_days).count()
+
+        # Monthly buckets grouped in 4 aggregate queries instead of 18.
+        month_start = now - timedelta(days=180)
+        schools_by_month = (
+            School.objects.filter(created_at__gte=month_start)
+            .extra(select={'month': "date_trunc('month', created_at)"})
+            .values('month')
+            .annotate(total=Count('id'))
+        )
+        users_by_month = (
+            User.objects.filter(created_at__gte=month_start)
+            .extra(select={'month': "date_trunc('month', created_at)"})
+            .values('month')
+            .annotate(total=Count('id'))
+        )
+        manual_by_month = (
+            ManualPayment.objects.filter(created_at__gte=month_start)
+            .extra(select={'month': "date_trunc('month', created_at)"})
+            .values('month')
+            .annotate(total=Sum('amount'))
+        )
+        online_by_month = (
+            OnlinePayment.objects.filter(status='success', created_at__gte=month_start)
+            .extra(select={'month': "date_trunc('month', created_at)"})
+            .values('month')
+            .annotate(total=Sum('amount'))
+        )
+
+        def bucketize(rows):
+            result = {}
+            for r in rows:
+                key = r['month'].strftime('%b %Y') if r['month'] else None
+                if key:
+                    result[key] = r['total']
+            return result
+
+        school_counts = bucketize(schools_by_month)
+        user_counts = bucketize(users_by_month)
+        manual_totals = {k: float(v) for k, v in bucketize(manual_by_month).items()}
+        online_totals = {k: float(v) for k, v in bucketize(online_by_month).items()}
 
         growth_chart = []
         for i in range(5, -1, -1):
             start = now - timedelta(days=(i + 1) * 30)
             end = now - timedelta(days=i * 30)
+            period = start.strftime('%b %Y')
             growth_chart.append({
-                'period': f"{start.strftime('%b %Y')}",
-                'schools': School.objects.filter(created_at__gte=start, created_at__lt=end).count(),
-                'users': User.objects.filter(created_at__gte=start, created_at__lt=end).count(),
-                'revenue': float(
-                    (ManualPayment.objects.filter(created_at__gte=start, created_at__lt=end).aggregate(total=Sum('amount'))['total'] or 0) +
-                    (OnlinePayment.objects.filter(created_at__gte=start, created_at__lt=end, status='success').aggregate(total=Sum('amount'))['total'] or 0)
-                )
+                'period': period,
+                'schools': school_counts.get(period, 0),
+                'users': user_counts.get(period, 0),
+                'revenue': manual_totals.get(period, 0) + online_totals.get(period, 0),
             })
 
-        return Response({
+        payload = {
             'kpis': {
                 'total_schools': total_schools,
                 'total_users': total_users,
-                'revenue_total': float(revenue_total),
+                'revenue_total': revenue_total,
                 'active_tenants': active_tenants,
                 'inactive_tenants': inactive_tenants,
                 'new_schools_30_days': new_schools_30,
                 'new_users_30_days': new_users_30,
             },
             'growth_chart': growth_chart
-        })
+        }
+
+        try:
+            cache.set(cache_key, payload, CACHE_TTL['super_admin_analytics'])
+        except Exception:
+            pass
+
+        return Response(payload)
+
+
     
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

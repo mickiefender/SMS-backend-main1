@@ -64,22 +64,41 @@ class ClassSerializer(serializers.ModelSerializer):
         return obj.level.name if obj.level else None
     
     def get_student_count(self, obj):
+        # ClassViewSet.get_queryset annotates `student_count`. Avoid issuing
+        # one COUNT query per class when the annotation is present.
+        annotated = getattr(obj, 'student_count', None)
+        if annotated is not None:
+            return annotated
         return obj.enrollments.filter(is_active=True).values('student').distinct().count()
     
+    @staticmethod
+    def _profile_pic_url(teacher):
+        """Return the profile picture URL for a teacher.
+
+        ``ClassViewSet.get_queryset`` prefetches
+        ``teachers__teacher__profile_picture`` so this attribute is cached on
+        the instance and raises NO query. The try/except is purely defensive
+        for callers that did not prefetch.
+        """
+        try:
+            pic = teacher.profile_picture
+            if pic is not None and pic.display_url:
+                return pic.display_url
+        except Exception:
+            pass
+        return None
+    
     def get_teachers(self, obj):
-        """Get all teachers assigned to this class with their details"""
-        class_teachers = ClassTeacher.objects.filter(class_obj=obj).select_related('teacher')
+        """Get all teachers assigned to this class with their details.
+
+        Uses the prefetched ``obj.teachers.all()`` rather than a fresh
+        ClassTeacher query per class.
+        """
         teachers_data = []
+        # Prefetched via ClassViewSet.get_queryset (teachers__teacher__profile_picture)
+        class_teachers = obj.teachers.all()
         for ct in class_teachers:
             teacher = ct.teacher
-            # Get profile picture URL
-            profile_pic_url = None
-            try:
-                profile_pic = UserProfilePicture.objects.filter(user=teacher).first()
-                if profile_pic and profile_pic.display_url:
-                    profile_pic_url = profile_pic.display_url
-            except Exception:
-                pass
             teachers_data.append({
                 'id': teacher.id,
                 'name': teacher.get_full_name() or teacher.username,
@@ -87,30 +106,25 @@ class ClassSerializer(serializers.ModelSerializer):
                 'phone': teacher.phone or 'N/A',
                 'is_form_tutor': ct.is_form_tutor,
                 'gender': getattr(teacher, 'gender', 'N/A'),
-                'profile_picture': profile_pic_url,
+                'profile_picture': self._profile_pic_url(teacher),
             })
         return teachers_data
     
     def get_form_tutor(self, obj):
-        """Get the form tutor (main class teacher)"""
-        form_tutor = ClassTeacher.objects.filter(class_obj=obj, is_form_tutor=True).select_related('teacher').first()
+        """Get the form tutor (main class teacher) using prefetched data."""
+        form_tutor = next(
+            (ct for ct in obj.teachers.all() if ct.is_form_tutor),
+            None,
+        )
         if form_tutor and form_tutor.teacher:
             teacher = form_tutor.teacher
-            # Get profile picture URL
-            profile_pic_url = None
-            try:
-                profile_pic = UserProfilePicture.objects.filter(user=teacher).first()
-                if profile_pic and profile_pic.display_url:
-                    profile_pic_url = profile_pic.display_url
-            except Exception:
-                pass
             return {
                 'id': teacher.id,
                 'name': teacher.get_full_name() or teacher.username,
                 'email': teacher.email,
                 'phone': teacher.phone or 'N/A',
                 'gender': getattr(teacher, 'gender', 'N/A'),
-                'profile_picture': profile_pic_url,
+                'profile_picture': self._profile_pic_url(teacher),
             }
         return None
 

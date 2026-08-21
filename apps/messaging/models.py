@@ -39,6 +39,13 @@ class Announcement(models.Model):
         ('archived', 'Archived'),
     ]
 
+    PRIORITY_CHOICES = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('urgent', 'Urgent'),
+    ]
+
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='announcements')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_announcements')
     title = models.CharField(max_length=255)
@@ -49,10 +56,19 @@ class Announcement(models.Model):
     send_to_teachers = models.BooleanField(default=False)
     send_to_students = models.BooleanField(default=False)
     send_to_all = models.BooleanField(default=True)
-    
+
+    # Optional: individually targeted recipients (students AND/OR teachers).
+    # When non-empty these users always receive the announcement, on top of
+    # whatever the audience flags above select.
+    recipients = models.ManyToManyField(
+        User, blank=True, related_name='announcements_received'
+    )
+
     # Optional: specific classes or grades
     classes = models.ManyToManyField(Class, blank=True, related_name='announcements')
-    
+
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
+
     published_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -96,7 +112,14 @@ class Notice(models.Model):
     send_to_teachers = models.BooleanField(default=False)
     send_to_students = models.BooleanField(default=False)
     send_to_all = models.BooleanField(default=True)
-    
+
+    # Optional: individually targeted recipients (students AND/OR teachers).
+    # When non-empty these users always receive the notice, on top of
+    # whatever the audience flags above select.
+    recipients = models.ManyToManyField(
+        User, blank=True, related_name='notices_received'
+    )
+
     is_pinned = models.BooleanField(default=False)
     expiry_date = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -126,4 +149,3 @@ class PersonalNotice(models.Model):
 
     def __str__(self):
         return f"Personal Notice: {self.title} to {self.student.get_full_name()} - {self.school.name}"
-

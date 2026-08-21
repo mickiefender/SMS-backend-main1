@@ -55,28 +55,122 @@ def render_template_html(template_id, student_data):
 
 def get_render_context(student_data):
     """Get context dict for template rendering"""
+    subject_scores = student_data.get('subject_scores', [])
+
+    def _num(key, default=0):
+        try:
+            return float(student_data.get(key, default) or default)
+        except (TypeError, ValueError):
+            return float(default)
+
     context = {
         'student_name': student_data.get('student_name', 'N/A'),
         'class_name': student_data.get('class_name', 'N/A'),
         'school_name': student_data.get('school_name', 'N/A'),
-        'total_score': student_data.get('total_score', 0),
+        'session_name': student_data.get('session_name', ''),
+        'gender': student_data.get('gender', ''),
+        'roll_number': student_data.get('roll_number', ''),
+        'academic_year': student_data.get('academic_year', ''),
+        'term': student_data.get('term', ''),
+        'position_in_class': student_data.get('position', 'N/A'),
         'position': student_data.get('position', 'N/A'),
-        'attendance': f"{student_data.get('attendance_percentage', 0)}%",
-        'teacher_remark': student_data.get('teacher_remark', ''),
+        'total_students': student_data.get('total_students', ''),
+        'average_mark': round(_num('average_marks'), 1),
+        'average_marks': round(_num('average_marks'), 1),
+        'average_remark': student_data.get('average_remark', ''),
+        'grade': student_data.get('grade', ''),
+        'overall_grade': student_data.get('grade', ''),
+        'attendance': f"{_num('attendance_percentage'):.0f}%",
+        'attendance_percentage': round(_num('attendance_percentage'), 1),
+        'days_present': student_data.get('days_present', 0),
+        'total_days': student_data.get('total_days', 0),
+        'conduct': student_data.get('conduct', ''),
+        'attitude': student_data.get('attitude', ''),
+        'interest': student_data.get('interest', ''),
+        'class_teacher_name': student_data.get('class_teacher_name', ''),
+        'class_teacher_remark': student_data.get('teacher_remark', '') or student_data.get('form_teacher_remarks', ''),
+        'principal_name': student_data.get('principal_name', ''),
+        'principal_remark': student_data.get('principal_remarks', ''),
+        'next_term_begins': student_data.get('next_term_begins', ''),
+        'promoted_to': student_data.get('promoted_to', ''),
+        'date': student_data.get('date', ''),
+        'best_subject_name': student_data.get('best_subject_name', ''),
+        'best_subject_score': student_data.get('best_subject_score', 0),
+        'promotion_status': student_data.get('promotion_status', ''),
+        # Subjects split into CA / exam components when provided by callers.
+        'ca_total': round(_num('ca_total'), 1),
+        'exam_total': round(_num('exam_total'), 1),
+        'grand_total': round(_num('grand_total'), 1),
+        'max_total': round(_num('max_total'), 1),
         # subjects_table generated below
     }
-    
+
     # Generate subjects table HTML
-    subjects_table = generate_subjects_table(student_data.get('subject_scores', []))
-    context['subjects_table'] = mark_safe(subjects_table)
-    
+    context['subjects_table'] = mark_safe(generate_subjects_table(subject_scores))
+
     return context
 
+
 def generate_subjects_table(subject_scores):
-    """Generate HTML table for subjects"""
+    """Generate HTML table for subjects.
+
+    When each score row carries ``ca_score`` / ``exam_score`` values, a
+    CLASS SCORE | EXAM SCORE | TOTAL layout is rendered (matching the
+    Ghanaian terminal-report format). Otherwise it falls back to the
+    simpler Score | Grade | Position layout.
+    """
     if not subject_scores:
         return '<p>No subjects found</p>'
-    
+
+    has_split = any(
+        s.get('ca_score') is not None or s.get('exam_score') is not None
+        for s in subject_scores
+    )
+
+    if has_split:
+        html = '''
+    <table style="width:100%; border-collapse: collapse; border: 1px solid #ddd;">
+        <thead>
+            <tr style="background-color: #f2f2f2;">
+                <th style="padding: 10px; text-align: left; border: 1px solid #ddd;">S/N</th>
+                <th style="padding: 10px; text-align: left; border: 1px solid #ddd;">SUBJECTS</th>
+                <th style="padding: 10px; text-align: center; border: 1px solid #ddd;">CLASS SCORE (50%)</th>
+                <th style="padding: 10px; text-align: center; border: 1px solid #ddd;">EXAM SCORE (50%)</th>
+                <th style="padding: 10px; text-align: center; border: 1px solid #ddd;">TOTAL SCORE (100%)</th>
+                <th style="padding: 10px; text-align: center; border: 1px solid #ddd;">GRADE</th>
+                <th style="padding: 10px; text-align: center; border: 1px solid #ddd;">REMARK</th>
+                <th style="padding: 10px; text-align: center; border: 1px solid #ddd;">POSITION IN SUBJECT</th>
+            </tr>
+        </thead>
+        <tbody>
+    '''
+        for idx, score in enumerate(subject_scores, start=1):
+            ca = score.get('ca_score')
+            exam = score.get('exam_score')
+            total = score.get('total_score', score.get('percentage', 0))
+            remark = score.get('remarks') or grade_remark(score.get('grade', ''))
+            html += f'''
+            <tr>
+                <td style="padding: 10px; border: 1px solid #ddd;">{idx}</td>
+                <td style="padding: 10px; border: 1px solid #ddd;">{score.get("subject_name", "N/A")}</td>
+                <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">{"" if ca is None else ca}</td>
+                <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">{"" if exam is None else exam}</td>
+                <td style="padding: 10px; text-align: center; border: 1px solid #ddd; font-weight: bold;">{total}</td>
+                <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">
+                    <span style="background: #4CAF50; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px;">
+                        {score.get("grade", "N/A")}
+                    </span>
+                </td>
+                <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">{remark}</td>
+                <td style="padding: 10px; text-align: center; border: 1px solid #ddd;">{score.get("subject_position", "N/A")}/{score.get("subject_total_students", "")}</td>
+            </tr>
+        '''
+        html += '''
+        </tbody>
+    </table>
+    '''
+        return html
+
     html = '''
     <table style="width:100%; border-collapse: collapse; border: 1px solid #ddd;">
         <thead>
@@ -89,7 +183,7 @@ def generate_subjects_table(subject_scores):
         </thead>
         <tbody>
     '''
-    
+
     for score in subject_scores:
         html += f'''
             <tr>
@@ -103,12 +197,28 @@ def generate_subjects_table(subject_scores):
                 <td style="padding: 12px; text-align: center; border: 1px solid #ddd;">{score.get("subject_position", "N/A")}/{score.get("subject_total_students", "N/A")}</td>
             </tr>
         '''
-    
+
     html += '''
         </tbody>
     </table>
     '''
     return html
+
+
+def grade_remark(grade_letter):
+    """Human-readable remark for a grade letter."""
+    remarks = {
+        'A': 'Excellent',
+        'B': 'Very Good',
+        'C': 'Good',
+        'D': 'Fair',
+        'E': 'Poor',
+        'F': 'Fail',
+        'HP': 'Highly Proficient',
+        'P': 'Proficient',
+        'AP': 'Approaching Proficiency',
+    }
+    return remarks.get((grade_letter or '').strip().upper(), '')
 
 def get_grade_letter(percentage):
     """Get grade letter from percentage"""

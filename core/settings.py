@@ -65,7 +65,10 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'core.middleware.MultiTenantMiddleware',
+    'core.middleware.PerformanceLoggingMiddleware',
 ]
+
+
 
 ROOT_URLCONF = 'core.urls'
 
@@ -97,15 +100,50 @@ database_url = os.environ.get('DATABASE_URL') or os.environ.get('POSTGRES_URL')
 if database_url:
     DATABASES['default'] = dj_database_url.config(
         default=database_url,
-        conn_max_age=0,  # Set to 0 to create fresh connections (avoids stale connection issues)
         conn_health_checks=True,
     )
+    # ─────────────────────────────────────────────────────────────────────
+    # CONNECTION MANAGEMENT (Supabase pooler)
+    #
+    # The production error
+    #   FATAL: (EMAXCONNSESSION) max clients reached in session mode -
+    #   max clients are limited to pool_size: 15
+    # happens because the app connects to the Supabase *session-mode*
+    # pooler (port 5432 / *-pooler.supabase.com). In session mode EACH
+    # persistent Django connection (CONN_MAX_AGE > 0) pins one of the 15
+    # backend sessions for its entire lifetime. With several gunicorn
+    # workers x persistent connections, 15 slots are exhausted in seconds
+    # once requests slow down (N+1) and begin to queue.
+    #
+    # Strategy:
+    #   * Default DB_CONN_MAX_AGE=0 → open/close a connection per request.
+    #     The pooler keeps real backend sessions warm, so the per-request
+    #     cost is a cheap pooler handshake, NOT a full PostgreSQL
+    #     connection. This is the recommended setting for ANY Supabase
+    #     pooler (session OR transaction mode).
+    #   * If you deliberately use a bare (non-pooler) Postgres host, set
+    #     DB_CONN_MAX_AGE to 60-300 to amortise TCP+SSL handshakes.
+    #   * The number of connections the app can hold at any moment is
+    #     bounded by `workers * CONCURRENCY` (gunicorn sync workers hold 1
+    #     connection each while idle). Keep gunicorn --workers small (2-4)
+    #     and read the recommended config in core/gunicorn.conf.py.
+    # ─────────────────────────────────────────────────────────────────────
+    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', '0'))
+    db_host = os.environ.get('POSTGRES_HOST', '') or ''
+    # Supabase poolers (session or transaction mode) must not use
+    # long-lived connections; the pooler owns session reuse.
+    if 'pooler.supabase.com' in db_host or os.environ.get('USE_SUPABASE_POOLER', '').lower() == 'true':
+        conn_max_age = 0
+    DATABASES['default']['CONN_MAX_AGE'] = conn_max_age
+    DATABASES['default']['CONN_HEALTH_CHECKS'] = True
+
     # Ensure SSL is required for Supabase
     DATABASES['default']['OPTIONS'] = {
         'sslmode': 'require',
-        'connect_timeout': 30,  # Increased timeout
+        'connect_timeout': 30,
     }
 else:
+
     # Fall back to individual environment variables
     db_name = os.environ.get('POSTGRES_DATABASE')
     if not db_name:
@@ -121,7 +159,8 @@ else:
             'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
             'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
             'PORT': os.environ.get('POSTGRES_PORT', '6543'),
-            'CONN_MAX_AGE': 60,  # Set to 0 to avoid stale connections
+            # Supabase poolers must not use long-lived connections.
+            'CONN_MAX_AGE': 0,
             'CONN_HEALTH_CHECKS': True,
             'OPTIONS': {
                 'connect_timeout': 30,

@@ -8,7 +8,10 @@ from django.contrib.auth import get_user_model
 from core.permissions import IsSchoolAdminOrHigher, IsTeacher, IsStudent
 from .models import Message, Announcement, AnnouncementRead, Notice, PersonalNotice
 from .serializers import MessageSerializer, AnnouncementSerializer, AnnouncementReadSerializer, NoticeSerializer, PersonalNoticeSerializer
-from .tasks import send_notice_email, send_announcement_email, send_personal_notice_email
+from .tasks import (
+    send_notice_email, send_announcement_email, send_personal_notice_email,
+    send_notice_push, send_announcement_push, send_personal_notice_push,
+)
 
 User = get_user_model()
 
@@ -83,28 +86,16 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         except Exception as e:
             print(f"[v0] Error setting created_by: {e}")
         
-        # Auto-publish and send emails on create (align with Notice)
+        # Auto-publish on create (align with Notice)
         announcement.status = 'published'
         announcement.published_date = timezone.now()
         announcement.save(update_fields=['status', 'published_date'])
+
+        # Queue email + in-app/FCM push delivery to the resolved recipients
+        # (audience flags + individually targeted recipients).
         send_announcement_email.delay(announcement.id)
-        print(f"[v0] Auto-published announcement {announcement.id} and queued email task")
-        
-        # 🔔 ANNOUNCEMENT NOTIFICATIONS - Send in-app notifications to all students in the school
-        try:
-            from core.notifications_api import send_notification_to_school
-            
-            send_notification_to_school(
-                school=self.request.user.school,
-                notification_type='announcement',
-                title=f'New Announcement: {announcement.title}',
-                message=announcement.content[:200] + '...' if len(announcement.content) > 200 else announcement.content,
-                related_object_id=announcement.id,
-                related_object_type='Announcement',
-                priority='normal'
-            )
-        except Exception as e:
-            print(f"[Notification] Error sending announcement notification: {e}")
+        send_announcement_push.delay(announcement.id)
+        print(f"[v0] Auto-published announcement {announcement.id}; email + push queued")
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
@@ -113,16 +104,17 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def publish(self, request, pk=None):
-        """Publish an announcement and send emails"""
+        """Publish an announcement and send emails + push"""
         announcement = self.get_object()
         announcement.status = 'published'
         announcement.published_date = timezone.now()
         announcement.save()
-        
-        # Send emails asynchronously
+
+        # Send emails + push asynchronously
         send_announcement_email.delay(announcement.id)
-        
-        return Response({'status': 'announcement published and emails queued for sending'})
+        send_announcement_push.delay(announcement.id)
+
+        return Response({'status': 'announcement published; emails and push notifications queued'})
 
     @action(detail=True, methods=['post'])
     def mark_as_read(self, request, pk=None):
@@ -182,13 +174,49 @@ class NoticeViewSet(viewsets.ModelViewSet):
         except Exception as e:
             print(f"[v0] Error setting created_by: {e}")
         
-        # Send emails asynchronously
+        # Send emails + in-app/FCM push asynchronously
         send_notice_email.delay(notice.id)
+        send_notice_push.delay(notice.id)
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsSchoolAdminOrHigher()]
         return [IsAuthenticated()]
+
+    @action(detail=False, methods=['get'], permission_classes=[IsSchoolAdminOrHigher()])
+    def recipients(self, request):
+        """
+        Directory of possible individual recipients (students + teachers)
+        in the admin's school — powers the recipient picker on the
+        Notices / Announcements pages.
+        """
+        school = request.user.school
+        users = User.objects.filter(school=school, is_active=True, role__in=['student', 'teacher'])
+
+        role_filter = request.query_params.get('role')
+        if role_filter:
+            users = users.filter(role=role_filter)
+
+        search = request.query_params.get('search')
+        if search:
+            from django.db.models import Q as _Q
+            users = users.filter(
+                _Q(first_name__icontains=search) |
+                _Q(last_name__icontains=search) |
+                _Q(username__icontains=search) |
+                _Q(email__icontains=search)
+            )
+
+        data = [
+            {
+                'id': u.id,
+                'name': u.get_full_name() or u.username,
+                'email': u.email,
+                'role': u.role,
+            }
+            for u in users.order_by('role', 'first_name')[:500]
+        ]
+        return Response({'results': data})
 
     @action(detail=True, methods=['post'])
     def pin(self, request, pk=None):
@@ -220,26 +248,11 @@ class NoticeViewSet(viewsets.ModelViewSet):
             title=title,
             content=content
         )
-        
-        # Send email and notification asynchronously
+
+        # Email + in-app/FCM push to the individual student
         send_personal_notice_email.delay(personal_notice.id)
-        
-        # 🔔 PERSONAL NOTICE NOTIFICATION
-        try:
-            from core.notifications_api import send_student_notification
-            
-            send_student_notification(
-                student=student,
-                notification_type='notice',
-                title=title,
-                message=content[:200] + '...' if len(content) > 200 else content,
-                related_object_id=personal_notice.id,
-                related_object_type='PersonalNotice',
-                priority='normal'
-            )
-        except Exception as e:
-            print(f"[Notification] Error sending personal notice: {e}")
-        
+        send_personal_notice_push.delay(personal_notice.id)
+
         serializer = PersonalNoticeSerializer(personal_notice)
         return Response({
             'status': 'personal notice sent successfully',

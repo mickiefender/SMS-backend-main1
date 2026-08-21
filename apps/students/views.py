@@ -2,6 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q
 from core.permissions import IsStudent, IsSchoolAdminOrHigher, IsSchoolAdminOrTeacher
 from apps.students.models import Grade, StudentGPA, StudentSocialClub, StudentSocialClubMember
@@ -14,9 +15,21 @@ from core.notifications import notification_service
 User = get_user_model()
 
 
+class LargePagePagination(PageNumberPagination):
+    """
+    Pagination that lets clients request a larger page via ?page_size=N.
+    Bounded so no client can blow up the server: max 500 rows per page.
+    """
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 500
+
+
 class GradeViewSet(viewsets.ModelViewSet):
     serializer_class = GradeSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = LargePagePagination
+    filterset_fields = ['student', 'subject', 'assessment_type', 'academic_session']
     
     def get_queryset(self):
         user = self.request.user
@@ -68,7 +81,19 @@ class GradeViewSet(viewsets.ModelViewSet):
             return queryset.distinct()
         
         # School admins see all grades in their school
-        return Grade.objects.filter(student__school=user.school).select_related('student', 'subject', 'academic_session')
+        queryset = Grade.objects.filter(student__school=user.school).select_related('student', 'subject', 'academic_session')
+
+        # Optional class scoping: ?class_obj=<id> returns only grades of
+        # students actively assigned to that class. Used by the Examination
+        # score-entry grid to load a whole class in one request.
+        class_id = self.request.query_params.get('class_obj')
+        if class_id:
+            queryset = queryset.filter(
+                student__class_assignments__class_obj_id=class_id,
+                student__class_assignments__is_active=True,
+            ).distinct()
+
+        return queryset
     
     def create(self, request, *args, **kwargs):
         """Create a new grade"""

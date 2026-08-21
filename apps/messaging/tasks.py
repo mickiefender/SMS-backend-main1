@@ -341,7 +341,11 @@ def send_via_django(subject, html_message, recipient_emails, is_notice=False, is
 
 
 def get_notice_recipients(notice):
-    """Get list of users who should receive the notice"""
+    """Get list of users who should receive the notice.
+
+    Audience flags select groups; individually targeted `recipients`
+    (students AND/OR teachers) are always included.
+    """
     recipients = set()
     school = notice.school
     
@@ -356,11 +360,21 @@ def get_notice_recipients(notice):
             students = User.objects.filter(school=school, role='student', is_active=True)
             recipients.update(students)
     
+    # Individually targeted recipients always receive it
+    targeted = User.objects.filter(
+        notices_received=notice, school=school, is_active=True
+    )
+    recipients.update(targeted)
+    
     return list(recipients)
 
 
 def get_announcement_recipients(announcement):
-    """Get list of users who should receive the announcement"""
+    """Get list of users who should receive the announcement.
+
+    Audience flags select groups; individually targeted `recipients`
+    (students AND/OR teachers) are always included.
+    """
     recipients = set()
     school = announcement.school
     
@@ -388,7 +402,99 @@ def get_announcement_recipients(announcement):
                 students = User.objects.filter(school=school, role='student', is_active=True)
                 recipients.update(students)
     
+    # Individually targeted recipients always receive it
+    targeted = User.objects.filter(
+        announcements_received=announcement, school=school, is_active=True
+    )
+    recipients.update(targeted)
+    
     return list(recipients)
+
+
+def _send_push_notifications(users, notification_type, title, message, target_id='', priority='normal'):
+    """Deliver in-app + FCM push notifications via the centralized service."""
+    from apps.notifications.services.notification_service import send_notification
+
+    sent = 0
+    for user in users:
+        try:
+            n = send_notification(
+                recipient=user,
+                notification_type=notification_type,
+                category='school_announcement',
+                title=title,
+                message=message[:200],
+                target_screen='notice_board',
+                target_id=str(target_id),
+                priority=priority,
+            )
+            if n:
+                sent += 1
+        except Exception as e:
+            print(f"[Push] Failed for user {user.id}: {e}")
+    return sent
+
+
+@shared_task
+def send_notice_push(notice_id):
+    """Send in-app + FCM push notifications for a notice to all its recipients."""
+    try:
+        notice = Notice.objects.get(id=notice_id)
+        recipients = get_notice_recipients(notice)
+        count = _send_push_notifications(
+            recipients,
+            'school_notice',
+            f'Notice: {notice.title}',
+            notice.content,
+            target_id=notice.id,
+            priority=notice.priority,
+        )
+        return f"Notice {notice_id}: push sent to {count} recipient(s)"
+    except Notice.DoesNotExist:
+        return f"Notice {notice_id} not found"
+    except Exception as e:
+        return f"Error sending notice push: {str(e)}"
+
+
+@shared_task
+def send_announcement_push(announcement_id):
+    """Send in-app + FCM push notifications for an announcement to all its recipients."""
+    try:
+        announcement = Announcement.objects.get(id=announcement_id)
+        recipients = get_announcement_recipients(announcement)
+        count = _send_push_notifications(
+            recipients,
+            'school_announcement',
+            f'Announcement: {announcement.title}',
+            announcement.content,
+            target_id=announcement.id,
+            priority=getattr(announcement, 'priority', 'normal'),
+        )
+        return f"Announcement {announcement_id}: push sent to {count} recipient(s)"
+    except Announcement.DoesNotExist:
+        return f"Announcement {announcement_id} not found"
+    except Exception as e:
+        return f"Error sending announcement push: {str(e)}"
+
+
+@shared_task
+def send_personal_notice_push(personal_notice_id):
+    """Send in-app + FCM push for a personal notice to the individual student."""
+    try:
+        personal_notice = PersonalNotice.objects.get(id=personal_notice_id)
+        count = _send_push_notifications(
+            [personal_notice.student],
+            'personal_notice',
+            f'Personal Notice: {personal_notice.title}',
+            personal_notice.content,
+            target_id=personal_notice.id,
+            priority='normal',
+        )
+        return f"Personal notice {personal_notice_id}: push sent to {count} recipient(s)"
+    except PersonalNotice.DoesNotExist:
+        return f"PersonalNotice {personal_notice_id} not found"
+    except Exception as e:
+        return f"Error sending personal notice push: {str(e)}"
 
 
 @shared_task

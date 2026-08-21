@@ -1,4 +1,5 @@
 from rest_framework import viewsets, status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -188,9 +189,31 @@ class ClassViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)
+
+        # Annotated student_count + prefetched teachers eliminate the N+1
+        # queries previously issued by ClassSerializer (one count + one
+        # profile-picture query per teacher per class).
+        base = self.queryset \
+            .annotate(
+                student_count=models.Count(
+                    'enrollments__student',
+                    filter=models.Q(enrollments__is_active=True),
+                    distinct=True,
+                )
+            ) \
+            .select_related('level') \
+            .prefetch_related(
+                models.Prefetch(
+                    'teachers',
+                    queryset=ClassTeacher.objects.select_related(
+                        'teacher', 'teacher__profile_picture'
+                    ),
+                )
+            )
+
         if school_id is None:
-            return self.queryset.all()
-        return self.queryset.filter(school_id=school_id)
+            return base.all()
+        return base.filter(school_id=school_id)
 
     def perform_create(self, serializer):
         school_id = get_school_filter(self.request.user)
@@ -809,9 +832,10 @@ class ClassSubjectViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)
+        qs = self.queryset.select_related('class_obj', 'subject', 'teacher')
         if school_id is None:
-            return self.queryset.all()
-        return self.queryset.filter(class_obj__school_id=school_id)
+            return qs.all()
+        return qs.filter(class_obj__school_id=school_id)
 
     def perform_create(self, serializer):
         serializer.save()
@@ -829,9 +853,10 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)
+        qs = self.queryset.select_related('class_obj', 'student', 'subject')
         if school_id is None:
-            return self.queryset.all()
-        return self.queryset.filter(class_obj__school_id=school_id)
+            return qs.all()
+        return qs.filter(class_obj__school_id=school_id)
 
     def perform_create(self, serializer):
         serializer.save()
@@ -904,10 +929,20 @@ class ExamViewSet(viewsets.ModelViewSet):
             serializer.save(created_by=self.request.user)
 
 
+class ExamResultPagination(PageNumberPagination):
+    """Larger page size for exam results so one student's full grade
+    history fits on a single page. Supports ?page_size= for fine control."""
+    page_size = 100
+    page_size_query_param = 'page_size'
+    max_page_size = 500
+
+
 class ExamResultViewSet(viewsets.ModelViewSet):
     """ViewSet for exam results"""
     serializer_class = ExamResultSerializer
     queryset = ExamResult.objects.all()
+    pagination_class = ExamResultPagination
+    filterset_fields = ['student', 'exam', 'school']
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
@@ -916,9 +951,13 @@ class ExamResultViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)
+        qs = self.queryset.select_related('exam', 'exam__subject', 'student')
+        # Newest first: the student detail screen shows the most recently
+        # recorded grades at the top and never drops older ones.
+        qs = qs.order_by('-recorded_date', '-id')
         if school_id is None:
-            return self.queryset.all()
-        return self.queryset.filter(school_id=school_id)
+            return qs
+        return qs.filter(school_id=school_id)
 
     def perform_create(self, serializer):
         school_id = get_school_filter(self.request.user)
