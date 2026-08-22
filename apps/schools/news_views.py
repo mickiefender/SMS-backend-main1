@@ -4,7 +4,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from core.permissions import IsSchoolAdminOrHigher
+from core.permissions import IsSchoolAdminOrHigher, CanManageNews
 from apps.schools.news_models import News
 from apps.schools.news_serializer import NewsSerializer, NewsListSerializer
 
@@ -17,7 +17,7 @@ class NewsViewSet(viewsets.ModelViewSet):
     - Banners endpoint: GET /api/schools/news/banners/ (any authenticated user)
     """
     serializer_class = NewsSerializer
-    permission_classes = [permissions.IsAuthenticated, IsSchoolAdminOrHigher]
+    permission_classes = [permissions.IsAuthenticated, CanManageNews]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get_permissions(self):

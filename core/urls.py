@@ -6,6 +6,7 @@ from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from .notifications_api import StudentNotificationViewSet
+from .staff_activity_api import StaffActivityWeeklyView
 
 # Create router for notifications
 router = DefaultRouter()
@@ -33,6 +34,8 @@ urlpatterns = [
     path('api/notifications/', include('apps.notifications.urls')),
     # Legacy student notifications API
     path('api/', include(router.urls)),
+    # Admin-staff dashboard: real recorded activity (weekly chart + recent actions)
+    path('api/core/staff-activity/weekly/', StaffActivityWeeklyView.as_view(), name='staff_activity_weekly'),
 ]
 
 if settings.DEBUG:

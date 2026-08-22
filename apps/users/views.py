@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 from django.contrib.auth import authenticate
 from django.db import connection, OperationalError, IntegrityError, transaction
 from django.db.models import Count
-from core.permissions import IsSchoolAdminOrHigher, IsSuperAdmin
+from core.permissions import IsSchoolAdminOrHigher, IsSuperAdmin, CanManageAdminStaff
 from apps.users.models import User, TeacherProfile, StudentProfile, RolePermission
 from apps.academics.models import StudentClass
 from apps.users.serializers import (
@@ -683,7 +683,8 @@ class StudentViewSet(viewsets.ModelViewSet):
 
 class AdminStaffViewSet(viewsets.ModelViewSet):
     """ViewSet for managing admin staff accounts and permissions"""
-    permission_classes = [IsAuthenticated, IsSchoolAdminOrHigher]
+    # School admins always manage staff; admin-staff with 'manage_admins' may too.
+    permission_classes = [IsAuthenticated, CanManageAdminStaff]
     queryset = User.objects.all() # queryset is required for ModelViewSet
 
     def get_serializer_class(self):

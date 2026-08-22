@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.db.models import Count, Sum, Q
 from django.utils import timezone
 from datetime import timedelta
-from core.permissions import IsSuperAdmin, IsSchoolAdminOrHigher
+from core.permissions import IsSuperAdmin, IsSchoolAdminOrHigher, CanManageSchoolProfile, CanSendMessages
 from core.cache import DashboardCache, CACHE_KEYS, CACHE_TTL, cache
 from apps.schools.models import School, Plan, Subscription, Announcement
 from apps.schools.serializers import SchoolSerializer, PlanSerializer, SubscriptionSerializer, AnnouncementSerializer
@@ -34,7 +34,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'destroy', 'suspend', 'activate']:
             return [IsSuperAdmin()]
         if self.action in ['update', 'partial_update']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanManageSchoolProfile()]
         return [IsAuthenticated()]
     
     def get_queryset(self):
@@ -327,7 +327,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         school.save()
         return Response({'status': 'School activated'})
     
-    @action(detail=False, methods=['post'], permission_classes=[IsSchoolAdminOrHigher])
+    @action(detail=False, methods=['post'], permission_classes=[CanManageSchoolProfile])
     def upload_logo(self, request):
         """
         Upload school logo to Supabase storage
@@ -393,7 +393,7 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
 
 class AnnouncementViewSet(viewsets.ModelViewSet):
     serializer_class = AnnouncementSerializer
-    permission_classes = [IsAuthenticated, IsSchoolAdminOrHigher]
+    permission_classes = [IsAuthenticated, CanSendMessages]
     
     def get_queryset(self):
         if self.request.user.role == 'super_admin':

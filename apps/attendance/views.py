@@ -4,7 +4,10 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db import models
 from django.db.models import Count, Avg, F
-from core.permissions import IsTeacher, IsSchoolAdminOrTeacher
+from core.permissions import (
+    IsTeacher, IsSchoolAdminOrTeacher,
+    CanManageAttendanceOrTeach, ADMIN_ROLES, STAFF_ROLES,
+)
 from apps.attendance.models import Attendance
 from apps.attendance.serializers import AttendanceSerializer
 from .tasks import send_attendance_marked_email
@@ -64,10 +67,10 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy', 'bulk_mark']:
-            return [IsAuthenticated(), IsTeacher()]
+            return [IsAuthenticated(), CanManageAttendanceOrTeach()]
         return [IsAuthenticated()]
 
-    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsTeacher])
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, CanManageAttendanceOrTeach])
     def bulk_mark(self, request):
         """Bulk mark attendance for multiple students with validation"""
         attendances_data = request.data.get('attendances', [])
@@ -106,6 +109,10 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         
         teacher_assignments = all_subjects_in_classes.union(specific_assignments)
         logger.info(f"Teacher {request.user.id} can mark {len(teacher_assignments)} class-subjects across {len(class_ids)} classes")
+
+        # Admin staff (school admins / admin-staff roles) manage attendance
+        # school-wide and are not bound by per-teacher assignments.
+        is_privileged = request.user.role in (ADMIN_ROLES | STAFF_ROLES)
 
         
         for i, att_data in enumerate(attendances_data):
@@ -151,9 +158,9 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 # normalize payload with resolved student user id
                 att_data['student'] = str(resolved_student_id)
 
-                # 1. Check teacher assignment
+                # 1. Check teacher assignment (skipped for privileged roles)
                 assignment_key = (int(class_id), int(subject_id))
-                if assignment_key not in teacher_assignments:
+                if not is_privileged and assignment_key not in teacher_assignments:
                     unauthorized.append({
                         'index': i,
                         'class_obj': class_id,
@@ -772,4 +779,3 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             print(f"[ExportMyStudentsSummary] Error: {str(e)}")
             traceback.print_exc()
             return Response({'error': str(e)}, status=500)
-        

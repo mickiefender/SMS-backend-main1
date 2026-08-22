@@ -10,6 +10,11 @@ from apps.academics.views import (
     TerminalReportTemplateViewSet, AssessmentViewSet,
     GradingScaleViewSet, GradingAssessmentViewSet, AssessmentTypeViewSet
 )
+from apps.academics.promotion_views import (
+    AcademicYearViewSet, PromotionRuleViewSet, PromotionPolicyViewSet,
+    PromotionBatchViewSet, PromotionPreviewView, PromotionBulkView,
+    StudentPromoteView, StudentAcademicHistoryView,
+)
 from apps.academics.views_documents import DocumentViewSet, DocumentFolderViewSet
 
 router = DefaultRouter()
@@ -41,7 +46,16 @@ router.register(r'assessments', AssessmentViewSet, basename='assessment')
 router.register(r'grading-scales', GradingScaleViewSet, basename='grading-scale')
 router.register(r'grading-assessments', GradingAssessmentViewSet, basename='grading-assessment')
 router.register(r'assessment-types', AssessmentTypeViewSet, basename='assessment-type')
+router.register(r'academic-years', AcademicYearViewSet, basename='academic-year')
+router.register(r'promotion-rules', PromotionRuleViewSet, basename='promotion-rule')
+router.register(r'promotion-policy', PromotionPolicyViewSet, basename='promotion-policy')
+router.register(r'promotion-batches', PromotionBatchViewSet, basename='promotion-batch')
 
 urlpatterns = [
     path('', include(router.urls)),
+    # Student promotion workflow
+    path('promotion/preview/', PromotionPreviewView.as_view(), name='promotion-preview'),
+    path('promotion/bulk/', PromotionBulkView.as_view(), name='promotion-bulk'),
+    path('students/<int:student_id>/promote/', StudentPromoteView.as_view(), name='student-promote'),
+    path('students/<int:student_id>/academic-history/', StudentAcademicHistoryView.as_view(), name='student-academic-history'),
 ]

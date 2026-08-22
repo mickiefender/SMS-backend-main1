@@ -66,6 +66,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'core.middleware.MultiTenantMiddleware',
     'core.middleware.PerformanceLoggingMiddleware',
+    'core.middleware.StaffActivityMiddleware',
 ]
 
 

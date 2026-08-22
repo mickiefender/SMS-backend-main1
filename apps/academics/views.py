@@ -8,7 +8,15 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import models, transaction
 from django.db.models import F, Q, Avg
 from django.utils import timezone
-from core.permissions import IsSchoolAdminOrHigher, IsSchoolAdminOrTeacher, IsSchoolAdminOrSelf
+from core.permissions import (
+    IsSchoolAdminOrHigher, IsSchoolAdminOrTeacher, IsSchoolAdminOrSelf,
+    CanManageSubjects, CanManageClasses, CanManageStudentAssignment,
+    CanManageTeacherAssignment, CanManageTimetable, CanManageFees,
+    CanManageNotices, CanManageEvents, CanManageGradingPolicy,
+    CanManageReportTemplates, CanViewPerformance, CanManageAcademicSessions,
+    CanManageAssessmentTypes, CanManageExamsOrTeach, CanManageGradesOrTeach,
+    CanManageAssessmentsOrTeach,
+)
 from apps.academics.models import (
     Faculty, Department, Level, Subject, Class,
     ClassSubject, Enrollment, Timetable, AcademicCalendarEvent,
@@ -87,7 +95,7 @@ class FacultyViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageSubjects()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -111,7 +119,7 @@ class DepartmentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageSubjects()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -136,7 +144,7 @@ class LevelViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageSubjects()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -160,7 +168,7 @@ class SubjectViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageSubjects()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -184,7 +192,7 @@ class ClassViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageClasses()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -827,7 +835,7 @@ class ClassSubjectViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageSubjects()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -848,7 +856,7 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageStudentAssignment()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -869,7 +877,7 @@ class TimetableViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageTimetable()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -889,7 +897,7 @@ class AcademicCalendarEventViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageEvents()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -912,7 +920,7 @@ class ExamViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrTeacher()]
+            return [IsAuthenticated(), CanManageExamsOrTeach()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -946,7 +954,7 @@ class ExamResultViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrTeacher()]
+            return [IsAuthenticated(), CanManageGradesOrTeach()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -974,7 +982,7 @@ class SchoolFeesViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageFees()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -991,7 +999,7 @@ class SchoolEventViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageEvents()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -1015,7 +1023,7 @@ class NoticeViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageNotices()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -1110,7 +1118,7 @@ class ClassTeacherViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageTeacherAssignment()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -1127,7 +1135,7 @@ class StudentClassViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageStudentAssignment()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -1144,7 +1152,7 @@ class ClassSubjectTeacherViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageTeacherAssignment()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -1179,7 +1187,7 @@ class AcademicSessionViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageAcademicSessions()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -1203,7 +1211,7 @@ class TerminalReportViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanViewPerformance()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -1544,7 +1552,7 @@ class GradingPolicyViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy', 'bulk_create']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageGradingPolicy()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -1668,7 +1676,7 @@ from apps.students.models import Grade
 
 class AssessmentViewSet(viewsets.ViewSet):
     """Assessment helper endpoints used by grade entry workflow."""
-    permission_classes = [IsAuthenticated, IsSchoolAdminOrTeacher]
+    permission_classes = [IsAuthenticated, CanManageGradesOrTeach]
 
     @action(detail=False, methods=['get'], url_path='by_class_subject_term')
     def by_class_subject_term(self, request):
@@ -1773,7 +1781,7 @@ class TerminalReportTemplateViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageReportTemplates()]
         return [IsAuthenticated()]
     
     def get_queryset(self):
@@ -1874,7 +1882,7 @@ class GradingScaleViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageGradingPolicy()]
         return [IsAuthenticated()]
 
     def get_serializer_class(self):
@@ -1940,7 +1948,7 @@ class AssessmentTypeViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageAssessmentTypes()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
@@ -2005,7 +2013,7 @@ class GradingAssessmentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrTeacher()]
+            return [IsAuthenticated(), CanManageAssessmentsOrTeach()]
         return [IsAuthenticated()]
 
     def get_queryset(self):

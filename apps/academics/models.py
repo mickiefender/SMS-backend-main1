@@ -3,6 +3,224 @@ from django.contrib.postgres.fields import JSONField
 from apps.schools.models import School
 
 
+# ==================== STUDENT PROMOTION SYSTEM ====================
+
+class AcademicYear(models.Model):
+    """
+    An academic year for a school (e.g. "2025/2026").
+
+    Distinct from AcademicSession (terms). Only one year should normally be
+    `is_current=True` per school; previous years are kept forever so
+    enrollment history is never destroyed.
+    """
+    STATUS_CHOICES = (
+        ('upcoming', 'Upcoming'),
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+    )
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='academic_years')
+    name = models.CharField(max_length=50)  # e.g. "2025/2026"
+    start_date = models.DateField()
+    end_date = models.DateField()
+    is_current = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='upcoming')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['school', 'name']
+        ordering = ['-start_date']
+        indexes = [
+            models.Index(fields=['school', 'is_current']),
+            models.Index(fields=['school', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.school.name} - {self.name}"
+
+    def save(self, *args, **kwargs):
+        # Enforce a single current academic year per school.
+        if self.is_current:
+            AcademicYear.objects.filter(school=self.school, is_current=True).exclude(id=self.id).update(is_current=False)
+            self.status = 'active'
+        super().save(*args, **kwargs)
+
+
+class StudentEnrollment(models.Model):
+    """
+    Year-based enrollment: which class a student belonged to in a given
+    academic year. One row per (student, academic year) — historical rows are
+    NEVER overwritten by promotion; promotion closes the old row and opens a
+    new one for the destination year.
+    """
+    STATUS_CHOICES = (
+        ('active', 'Active'),
+        ('promoted', 'Promoted'),
+        ('repeating', 'Repeating'),
+        ('graduated', 'Graduated'),
+        ('withdrawn', 'Withdrawn'),
+        ('transferred', 'Transferred'),
+    )
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='student_enrollments')
+    student = models.ForeignKey('users.User', on_delete=models.CASCADE, limit_choices_to={'role': 'student'}, related_name='year_enrollments')
+    academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name='enrollments')
+    # Lazy reference: Class is defined later in this module.
+    class_obj = models.ForeignKey('Class', on_delete=models.CASCADE, related_name='year_enrollments')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    # The enrollment this one was created from (promotion chain).
+    promoted_from = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='promoted_to')
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = ['student', 'academic_year']
+        indexes = [
+            models.Index(fields=['school', 'academic_year', 'class_obj']),
+            models.Index(fields=['student', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.student.get_full_name()} - {self.academic_year.name} - {self.class_obj.name}"
+
+
+class PromotionRule(models.Model):
+    """
+    Configurable FROM -> TO class transition for a school.
+    `to_class` is NULL for terminal classes (JHS 3 etc.) where students
+    graduate instead of moving to another class.
+    """
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='promotion_rules')
+    # Lazy references: Class is defined later in this module.
+    from_class = models.ForeignKey('Class', on_delete=models.CASCADE, related_name='promotion_rules_from')
+    to_class = models.ForeignKey('Class', on_delete=models.SET_NULL, null=True, blank=True, related_name='promotion_rules_to')
+    # `order` is a PostgreSQL reserved word — stored as sort_order in the DB.
+    order = models.IntegerField(default=0, db_column='sort_order')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['school', 'from_class']
+        ordering = ['order']
+
+    def __str__(self):
+        target = self.to_class.name if self.to_class else 'Graduated'
+        return f"{self.school.name}: {self.from_class.name} -> {target}"
+
+
+class PromotionPolicy(models.Model):
+    """
+    Per-school promotion policy controlling how recommended actions are
+    computed during preview.
+
+    Modes:
+      - promote_all:       every student is recommended for promotion.
+      - average_threshold: promote when final average >= pass_mark, else repeat.
+      - grading_scale:     use the school's active GradingScale entries
+                           (promotion_eligible flag) to decide.
+      - manual_review:     everything requires an administrator decision.
+    """
+    MODE_CHOICES = (
+        ('promote_all', 'Promote Everyone'),
+        ('average_threshold', 'Based On Final Average'),
+        ('grading_scale', 'Based On Grading Scale'),
+        ('manual_review', 'Require Administrator Decision'),
+    )
+
+    school = models.OneToOneField(School, on_delete=models.CASCADE, related_name='promotion_policy')
+    mode = models.CharField(max_length=30, choices=MODE_CHOICES, default='promote_all')
+    pass_mark = models.FloatField(default=50, help_text="Final-average threshold (%) for average_threshold mode")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.school.name} - {self.get_mode_display()}"
+
+
+class PromotionBatch(models.Model):
+    """
+    One bulk (or individual) promotion operation. Keeps permanent history of
+    what was done, by whom, and the outcome counts.
+    """
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+        ('partially_completed', 'Partially Completed'),
+        ('failed', 'Failed'),
+    )
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='promotion_batches')
+    source_academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name='promotions_from')
+    destination_academic_year = models.ForeignKey(AcademicYear, on_delete=models.CASCADE, related_name='promotions_to')
+    created_by = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True, related_name='promotion_batches')
+    total_students = models.IntegerField(default=0)
+    promoted_count = models.IntegerField(default=0)
+    repeated_count = models.IntegerField(default=0)
+    graduated_count = models.IntegerField(default=0)
+    withdrawn_count = models.IntegerField(default=0)
+    transferred_count = models.IntegerField(default=0)
+    failed_count = models.IntegerField(default=0)
+    skipped_count = models.IntegerField(default=0)
+    status = models.CharField(max_length=25, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['school', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.source_academic_year.name} -> {self.destination_academic_year.name} ({self.status})"
+
+
+class PromotionRecord(models.Model):
+    """Per-student outcome inside a PromotionBatch."""
+    ACTION_CHOICES = (
+        ('promote', 'Promote'),
+        ('repeat', 'Repeat'),
+        ('graduate', 'Graduate'),
+        ('withdraw', 'Withdraw'),
+        ('transfer', 'Transfer'),
+        ('manual_review', 'Manual Review'),
+    )
+    RECORD_STATUS_CHOICES = (
+        ('success', 'Success'),
+        ('skipped', 'Skipped'),
+        ('failed', 'Failed'),
+    )
+
+    batch = models.ForeignKey(PromotionBatch, on_delete=models.CASCADE, related_name='records')
+    student = models.ForeignKey('users.User', on_delete=models.CASCADE, limit_choices_to={'role': 'student'}, related_name='promotion_records')
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    source_enrollment = models.ForeignKey(StudentEnrollment, on_delete=models.SET_NULL, null=True, blank=True, related_name='promotion_records')
+    # Lazy references: Class is defined later in this module.
+    from_class = models.ForeignKey('Class', on_delete=models.SET_NULL, null=True, blank=True, related_name='promotion_records_from')
+    to_class = models.ForeignKey('Class', on_delete=models.SET_NULL, null=True, blank=True, related_name='promotion_records_to')
+    final_average = models.FloatField(null=True, blank=True)
+    reason = models.TextField(blank=True)
+    warning = models.TextField(blank=True)
+    status = models.CharField(max_length=10, choices=RECORD_STATUS_CHOICES, default='success')
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['batch', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.student.get_full_name()} - {self.action} ({self.status})"
+
+
 class Faculty(models.Model):
     school = models.ForeignKey(School, on_delete=models.CASCADE, related_name='faculties')
     name = models.CharField(max_length=255)

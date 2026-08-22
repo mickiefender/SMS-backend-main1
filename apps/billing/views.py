@@ -7,7 +7,10 @@ from django.db.models import Q, Sum, Count
 from django.utils import timezone
 from datetime import timedelta
 import logging
-from core.permissions import IsSchoolAdminOrHigher, IsSuperAdmin
+from core.permissions import (
+    IsSchoolAdminOrHigher, IsSuperAdmin,
+    CanManageFees, CanCollectFees, CanManageExpenses,
+)
 from apps.billing.models import Invoice, Payment, Fee, StudentFeeAssignment, ClassFeeAssignment, SchoolFeeAssignment, ManualPayment, OnlinePayment, SchoolExpense
 from apps.billing.serializers import (
     InvoiceSerializer, 
@@ -38,7 +41,7 @@ class FeeViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanManageFees()]
         return [IsAuthenticated()]
     
     def get_queryset(self):
@@ -59,7 +62,7 @@ class SchoolFeeAssignmentViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanManageFees()]
         return [IsAuthenticated()]
     
     def get_queryset(self):
@@ -128,7 +131,7 @@ class ClassFeeAssignmentViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanManageFees()]
         return [IsAuthenticated()]
     
     def get_queryset(self):
@@ -199,7 +202,7 @@ class StudentFeeAssignmentViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanManageFees()]
         return [IsAuthenticated()]
     
     def create(self, request, *args, **kwargs):
@@ -373,7 +376,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanManageFees()]
         return [IsAuthenticated()]
     
     def get_queryset(self):
@@ -407,7 +410,7 @@ class ManualPaymentViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanCollectFees()]
         return [IsAuthenticated()]
     
     def get_queryset(self):
@@ -601,7 +604,7 @@ class SchoolExpenseViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanManageExpenses()]
         return [IsAuthenticated()]
     
     def get_queryset(self):

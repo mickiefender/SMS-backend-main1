@@ -5,7 +5,10 @@ from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Q
 from django.contrib.auth import get_user_model
-from core.permissions import IsSchoolAdminOrHigher, IsTeacher, IsStudent
+from core.permissions import (
+    IsSchoolAdminOrHigher, IsTeacher, IsStudent,
+    CanManageNotices, CanSendMessages, CanViewRecipients,
+)
 from .models import Message, Announcement, AnnouncementRead, Notice, PersonalNotice
 from .serializers import MessageSerializer, AnnouncementSerializer, AnnouncementReadSerializer, NoticeSerializer, PersonalNoticeSerializer
 from .tasks import (
@@ -99,7 +102,7 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanSendMessages()]
         return [IsAuthenticated()]
 
     @action(detail=True, methods=['post'])
@@ -180,10 +183,10 @@ class NoticeViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsSchoolAdminOrHigher()]
+            return [CanManageNotices()]
         return [IsAuthenticated()]
 
-    @action(detail=False, methods=['get'], permission_classes=[IsSchoolAdminOrHigher()])
+    @action(detail=False, methods=['get'], permission_classes=[CanViewRecipients])
     def recipients(self, request):
         """
         Directory of possible individual recipients (students + teachers)
@@ -226,7 +229,7 @@ class NoticeViewSet(viewsets.ModelViewSet):
         notice.save()
         return Response({'status': f"notice {'pinned' if notice.is_pinned else 'unpinned'}"})
 
-    @action(detail=False, methods=['post'], permission_classes=[IsSchoolAdminOrHigher()])
+    @action(detail=False, methods=['post'], permission_classes=[CanManageNotices])
     def send_personal_notice(self, request):
         """Send personal notice to a specific student"""
         student_id = request.data.get('student_id')

@@ -4,7 +4,10 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q
-from core.permissions import IsStudent, IsSchoolAdminOrHigher, IsSchoolAdminOrTeacher
+from core.permissions import (
+    IsStudent, IsSchoolAdminOrHigher, IsSchoolAdminOrTeacher,
+    CanManageGradesOrTeach, CanManageStudents,
+)
 from apps.students.models import Grade, StudentGPA, StudentSocialClub, StudentSocialClubMember
 from apps.students.serializers import GradeSerializer, StudentGPASerializer, StudentPortalSerializer, StudentSocialClubSerializer, StudentSocialClubMemberSerializer
 from apps.students.tasks import send_faculty_advisor_notification
@@ -108,7 +111,7 @@ class GradeViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrTeacher()]
+            return [IsAuthenticated(), CanManageGradesOrTeach()]
         return [IsAuthenticated()]
     
     def perform_create(self, serializer):
@@ -869,7 +872,7 @@ class StudentSocialClubViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAuthenticated(), IsSchoolAdminOrHigher()]
+            return [IsAuthenticated(), CanManageStudents()]
         return [IsAuthenticated()]
 
     def perform_create(self, serializer):
@@ -909,7 +912,7 @@ class StudentSocialClubViewSet(viewsets.ModelViewSet):
         
         return Response({'error': 'Invalid action'}, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, IsSchoolAdminOrHigher])
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated, CanManageStudents])
     def approve_membership(self, request, pk=None):
         """Approve a student's membership"""
         club = self.get_object()
