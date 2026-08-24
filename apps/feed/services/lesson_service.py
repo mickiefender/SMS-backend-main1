@@ -11,6 +11,14 @@ from django.utils import timezone
 from apps.feed import models
 from apps.feed.services.upload_service import UploadService
 from apps.feed.services.analytics_service import AnalyticsService
+from apps.feed.services.feed_policy_service import (
+    FeedPolicyError,
+    assert_media_allowed,
+    assert_video_constraints,
+    get_feed_policies,
+    is_feed_restricted,
+    resolve_initial_status,
+)
 from apps.feed.utils import detect_mime_type
 
 
@@ -55,8 +63,40 @@ class LessonService:
         media_file = validated_data.pop('media_file', None)
         thumbnail_file = validated_data.pop('thumbnail_file', None)
         media_resource_type = None
-        status = validated_data.get('status', 'pending_review')
+
+        # ── Feed Supervisor policy enforcement ──────────────────────
+        # Restricted creators cannot post at all.
+        if is_feed_restricted(teacher):
+            raise FeedPolicyError(
+                'Your Feed posting privileges are currently restricted '
+                'by a platform moderator.'
+            )
+        policies = get_feed_policies()
+        if policies.get('who_can_post') == 'admins_only' and getattr(
+                teacher, 'role', '') == 'teacher':
+            raise FeedPolicyError(
+                'Feed posting is currently limited to platform administrators.'
+            )
+        # Media types must be permitted by the current feed settings.
+        incoming_media_types = []
+        if cloudflare_video_uid:
+            incoming_media_types.append('video')
+        if media_file:
+            incoming_media_types.append(LessonService._get_resource_type_from_file(media_file))
+        incoming_media_types += [
+            r.get('resource_type', '') for r in resources]
+        try:
+            assert_media_allowed([t for t in incoming_media_types if t])
+            if media_file and LessonService._get_resource_type_from_file(media_file) == 'video':
+                assert_video_constraints(file_obj=media_file)
+        except FeedPolicyError:
+            raise
+        # Moderation mode decides whether posts publish automatically or
+        # wait for approval (report_based_moderation publishes immediately).
+        validated_data['status'] = resolve_initial_status()
+        status = validated_data['status']
         visibility = validated_data.get('visibility', 'public')
+        # ────────────────────────────────────────────────────────────
 
         # Default the school to the teacher's school when the client does not
         # provide one (the mobile app has no school picker on upload).

@@ -54,6 +54,8 @@ INSTALLED_APPS = [
     'apps.messaging',
     'apps.feed',
     'apps.notifications',
+    # Super Admin platform (roles, audit, tickets, flags, settings, ...)
+    'apps.platform',
 ]
 
 MIDDLEWARE = [

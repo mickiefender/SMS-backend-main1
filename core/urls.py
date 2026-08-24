@@ -24,6 +24,9 @@ urlpatterns = [
     path('api/assignments/', include('apps.assignments.urls')),
     path('api/billing/', include('apps.billing.urls')),
     path('api/payments/', include('apps.payments.urls')),
+    # Super Admin platform APIs (roles, audit, tickets, flags, settings,
+    # campaigns, api keys, security, storage, moderation, finance, monitoring)
+    path('api/platform/', include('apps.platform.urls')),
     path('api/students/', include('apps.students.urls')),
     path('api/messaging/', include('apps.messaging.urls')),
     path('api/feed/', include('apps.feed.urls')),

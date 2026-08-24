@@ -26,6 +26,9 @@ from apps.feed.services.recommendation_service import RecommendationService
 from apps.feed.services.search_service import SearchService
 from apps.feed.services.analytics_service import AnalyticsService
 from apps.feed.services.notification_service import NotificationService
+from apps.feed.services.feed_policy_service import (
+    FeedPolicyError, assert_can_comment, assert_can_report,
+)
 from apps.feed.services.moderation_service import ModerationService
 from apps.feed.services.upload_service import UploadService
 from apps.feed.models_v2 import InteractionType as InteractionTypeEnum
@@ -78,6 +81,12 @@ class FeedLessonViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if request.user.role != 'teacher':
             raise PermissionDenied('Only teachers can upload lessons.')
+        # Feed Supervisor enforcement: restricted creators cannot post.
+        from apps.feed.supervisor_views import is_feed_restricted
+        if is_feed_restricted(request.user):
+            raise PermissionDenied(
+                'Your Feed posting privileges are currently restricted by a platform moderator.'
+            )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         lesson = LessonService.create_lesson(request.user, serializer.validated_data)
@@ -422,6 +431,11 @@ class FeedCommentViewSet(viewsets.ModelViewSet):
         return context
 
     def create(self, request, *args, **kwargs):
+        # Feed Supervisor policy: comments can be globally disabled.
+        try:
+            assert_can_comment()
+        except FeedPolicyError as exc:
+            raise PermissionDenied(str(exc))
         lesson_id = self.kwargs.get('lesson_id') or request.query_params.get('lesson_id')
         lesson = models.FeedLesson.objects.get(pk=lesson_id)
         serializer = self.get_serializer(data=request.data)
@@ -553,6 +567,11 @@ class FeedReportViewSet(viewsets.ModelViewSet):
         return models.FeedReport.objects.filter(reporter=self.request.user)
 
     def create(self, request, *args, **kwargs):
+        # Feed Supervisor policy: reporting can be globally disabled.
+        try:
+            assert_can_report()
+        except FeedPolicyError as exc:
+            raise PermissionDenied(str(exc))
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data

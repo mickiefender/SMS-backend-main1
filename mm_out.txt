@@ -1,0 +1,51 @@
+python-dotenv could not parse statement starting at line 28
+Redis pub/sub client initialized successfully
+Traceback (most recent call last):
+  File "/Users/mickie/Desktop/websites/Alara-website-frontend/backend/manage.py", line 22, in <module>
+    main()
+    ~~~~^^
+  File "/Users/mickie/Desktop/websites/Alara-website-frontend/backend/manage.py", line 18, in main
+    execute_from_command_line(sys.argv)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/core/management/__init__.py", line 443, in execute_from_command_line
+    utility.execute()
+    ~~~~~~~~~~~~~~~^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/core/management/__init__.py", line 437, in execute
+    self.fetch_command(subcommand).run_from_argv(self.argv)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/core/management/base.py", line 420, in run_from_argv
+    self.execute(*args, **cmd_options)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/core/management/base.py", line 464, in execute
+    output = self.handle(*args, **options)
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/core/management/base.py", line 111, in wrapper
+    res = handle_func(*args, **kwargs)
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/core/management/commands/makemigrations.py", line 216, in handle
+    loader.project_state(),
+    ~~~~~~~~~~~~~~~~~~~~^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/db/migrations/loader.py", line 409, in project_state
+    return self.graph.make_state(
+           ~~~~~~~~~~~~~~~~~~~~~^
+        nodes=nodes, at_end=at_end, real_apps=self.unmigrated_apps
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/db/migrations/graph.py", line 331, in make_state
+    project_state = self.nodes[node].mutate_state(project_state, preserve=False)
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/db/migrations/migration.py", line 91, in mutate_state
+    operation.state_forwards(self.app_label, new_state)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/db/migrations/operations/fields.py", line 227, in state_forwards
+    state.alter_field(
+    ~~~~~~~~~~~~~~~~~^
+        app_label,
+        ^^^^^^^^^^
+    ...<3 lines>...
+        self.preserve_default,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/django/db/migrations/state.py", line 287, in alter_field
+    fields = self.models[model_key].fields
+             ~~~~~~~~~~~^^^^^^^^^^^
+KeyError: ('academics', 'userprofilepicture')

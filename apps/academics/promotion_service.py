@@ -85,7 +85,8 @@ def ensure_source_enrollments(school_id, academic_year):
     existing schools can run promotions without manual data migration.
     Self-healing: tops up any MISSING enrollments (e.g. after a partial or
     interrupted earlier run) instead of skipping when some rows exist.
-    Returns number of rows created.
+    Returns a dict: {pairs_found, created} so callers can surface
+    diagnostics when a school's students are not linked to any class.
     """
     # Gather distinct (student, class) pairs from BOTH legacy assignment
     # mechanisms so pre-promotion schools get their students mapped into the
@@ -140,7 +141,7 @@ def ensure_source_enrollments(school_id, academic_year):
         and (student_id, class_id) not in existing
     ]
     if not rows:
-        return 0
+        return {'pairs_found': len(pairs), 'created': 0}
 
     try:
         # ignore_conflicts keeps this safe against concurrent runs and the
@@ -166,8 +167,8 @@ def ensure_source_enrollments(school_id, academic_year):
                 created += 1
             except Exception:
                 continue
-        return created
-    return len(rows)
+        return {'pairs_found': len(pairs), 'created': created}
+    return {'pairs_found': len(pairs), 'created': len(rows)}
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +183,21 @@ def build_promotion_preview(school_id, source_year, dest_year, class_ids=None):
     one-time backfill of source-year enrollments from legacy assignments
     (ensure_source_enrollments) so previews work for pre-existing schools.
     """
-    ensure_source_enrollments(school_id, source_year)
+    backfill = ensure_source_enrollments(school_id, source_year)
+
+    # Diagnostics: how many of the school's active students are NOT linked to
+    # any class (they cannot be promoted until they are assigned to a class).
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    total_active_students = User.objects.filter(
+        school_id=school_id, role='student', is_active=True,
+    ).count()
+    students_with_class = (
+        StudentClass.objects.filter(
+            class_obj__school_id=school_id, is_active=True,
+        ).values_list('student_id', flat=True).distinct().count()
+    )
+    unassigned_students = max(0, total_active_students - students_with_class)
 
     policy = PromotionPolicy.objects.filter(school_id=school_id, is_active=True).first()
 
@@ -313,6 +328,13 @@ def build_promotion_preview(school_id, source_year, dest_year, class_ids=None):
         'policy_mode': policy.mode if policy else 'promote_all',
         'classes': list(classes_map.values()),
         'summary': summary,
+        'diagnostics': {
+            'total_active_students': total_active_students,
+            'students_with_class_assignment': students_with_class,
+            'unassigned_students': unassigned_students,
+            'backfilled_enrollments': backfill.get('created', 0),
+            'rules_configured': len(rules),
+        },
     }
 
 

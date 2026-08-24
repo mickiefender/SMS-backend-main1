@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from apps.feed import admin_views, views, guest_views, recommendation_views, views_direct_upload
+from apps.feed import admin_views, views, guest_views, recommendation_views, supervisor_views, views_direct_upload
 
 router = DefaultRouter()
 router.register(r'lesson', views.FeedLessonViewSet, basename='feed-lesson')
@@ -20,6 +20,12 @@ admin_router.register(r'curricula', admin_views.AdminCurriculumViewSet, basename
 admin_router.register(r'learning-objectives', admin_views.AdminLearningObjectiveViewSet, basename='admin-learning-objective')
 admin_router.register(r'tags', admin_views.AdminTagViewSet, basename='admin-tag')
 admin_router.register(r'visibility-scopes', admin_views.AdminVisibilityScopeViewSet, basename='admin-visibility-scope')
+
+# Super Admin Feed Supervisor (global visibility + moderation)
+supervisor_router = DefaultRouter()
+supervisor_router.register(
+    r'supervisor', supervisor_views.FeedSupervisorViewSet,
+    basename='feed-supervisor')
 
 # Comments nested under lessons
 comment_list = views.FeedCommentViewSet.as_view({
@@ -67,6 +73,8 @@ urlpatterns = [
 
     # Direct upload URL for Cloudflare Stream (bypasses nginx)
     path('direct-upload-url/', views_direct_upload.DirectUploadUrlView.as_view(), name='feed-direct-upload-url'),
+
+    path('', include(supervisor_router.urls)),
 
     # =================================================================
     # Recommendation & Interaction Tracking endpoints (new)

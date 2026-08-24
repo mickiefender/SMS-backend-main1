@@ -1,0 +1,5 @@
+__init__.py
+__pycache__
+0001_initial.py
+0002_userprofilepicture_supabase.py
+apps/academics/models.py:664:class UserProfilePicture(models.Model):
