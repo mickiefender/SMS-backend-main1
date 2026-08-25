@@ -29,9 +29,11 @@ class FeedService:
     def get_feed(user, strategy: str = 'trending', school_id: Optional[int] = None):
         """Public feed endpoint used by both guests and authenticated users."""
         # Ranked querysets contain a user-specific rec_score annotation. IDs
-        # alone cannot restore that ordering on a cache hit.
-        cache_ranked_feed = not (
-            user and user.is_authenticated and strategy in ('recommended', 'personalized')
+        # alone cannot restore that ordering on a cache hit. `latest` is also
+        # never cached so newly published posts appear at the top immediately
+        # (teachers expect real-time chronological order).
+        cache_ranked_feed = (
+            strategy not in ('recommended', 'personalized', 'latest')
         )
         cache_key = None
         if cache_ranked_feed and user and user.is_authenticated:

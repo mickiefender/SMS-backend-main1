@@ -1,76 +1,442 @@
 """
 Personalized Recommendation Service for the Alara Learning Feed.
 
-Implements the 70/20/10 feed composition:
-  - 70% personalized videos (based on interest scores + onboarding + recent engagement)
-  - 20% trending educational videos (popular across the platform)
-  - 10% discovery / random educational videos (serendipity)
+Implements a TikTok/Reels-style ranked feed for students:
 
-The recommendation rank for personalised items combines:
-  - Preference match (from UserInterestScore + onboarding)
-  - User interaction history (recency-weighted)
-  - Video popularity (trending_score, view_count)
-  - Content freshness (recency bonus for newer content)
-  - Recent engagement (boosts videos the user recently watched or engaged with)
+Scoring signals (each normalised to 0-100, combined with fixed weights):
+  - Freshness       — exponential half-life decay so newly uploaded posts can
+                      appear near the top even with zero likes.
+  - Relevance       — match against student interests (subject, teacher,
+                      level, class, tags) learned from behaviour + onboarding.
+  - Popularity      — views, likes, comments, shares, saves (log-scaled).
+  - Quality         — completion rate and avg watch time.
+  - Exploration     — small per-request random jitter so refreshes vary.
 
-Behavioural data (interest scores) gradually becomes more important than
-original onboarding preferences as the user accumulates interactions.
+Additional behaviours:
+  - Diversity spacing: never more than MAX_CONSECUTIVE_SAME_TEACHER posts from
+    one teacher or MAX_CONSECUTIVE_SAME_SUBJECT posts from one subject.
+  - Session-stable snapshots: the full ranked id list is cached under an
+    opaque feed token so paginated scrolling never jumps or duplicates.
+    Pull-to-refresh simply requests a new token (fresh ranking).
 """
-import random
 import logging
-from decimal import Decimal
+import math
+import random
+import uuid
 from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
 
-from django.db import connection
-from django.db.models import (
-    Case, Count, DecimalField, ExpressionWrapper, F, Q, Value, When,
-    IntegerField, FloatField, Func, DateTimeField,
-)
+from django.core.cache import cache
+from django.db.models import DecimalField, ExpressionWrapper, F, Q, Value
 from django.utils import timezone
 
-from apps.feed.models import FeedLesson, FeedTag
+from apps.feed.models import FeedLesson
 from apps.feed.models_v2 import (
     InterestDomain,
-    UserInteraction,
-    UserInterestScore,
     InteractionType,
+    UserInteraction,
 )
 from apps.feed.services.interest_scoring_service import InterestScoringService
 
 logger = logging.getLogger(__name__)
 
-# ─── Constants ───────────────────────────────────────────────────────────────
-
-# Feed composition ratios
-PERSONALIZED_FRACTION = Decimal('0.70')   # 70%
-TRENDING_FRACTION = Decimal('0.20')       # 20%
-DISCOVERY_FRACTION = Decimal('0.10')      # 10%
-
-# Scoring weights for the composite recommendation score
-WEIGHT_PREFERENCE_MATCH = Decimal('0.35')
-WEIGHT_POPULARITY = Decimal('0.25')
-WEIGHT_FRESHNESS = Decimal('0.20')
-WEIGHT_RECENT_ENGAGEMENT = Decimal('0.20')
-
-# Freshness bonus: videos published within this window get a boost
-FRESHNESS_WINDOW_DAYS = 14
-FRESHNESS_BONUS = Decimal('15.00')
-
-# Recent engagement window: interactions in the last N hours get a boost
-RECENT_ENGAGEMENT_HOURS = 48
-RECENT_ENGAGEMENT_BONUS = Decimal('10.00')
-
-# Minimum interest score to consider a preference active
-MIN_INTEREST_THRESHOLD = Decimal('5.00')
-
-# How many lessons to fetch for the personalized pool
-PERSONALIZED_POOL_SIZE = 200
-
 
 class PersonalizedRecommendationService:
 
-    # ─── Public API: get blended feed ───────────────────────────
+    # ── Snapshot / pagination ───────────────────────────────────
+    SNAPSHOT_TTL_SECONDS = 1800          # 30 min session stability
+    SNAPSHOT_MAX_IDS = 600               # hard cap on ranked snapshot length
+
+    # ── Candidate pooling ───────────────────────────────────────
+    RECENT_POOL_SIZE = 150               # newest posts always considered
+    POPULAR_POOL_SIZE = 250              # high-engagement posts considered
+
+    # ── Scoring ─────────────────────────────────────────────────
+    FRESHNESS_HALF_LIFE_HOURS = 36       # score halves every 36h
+    NEW_POST_WINDOW_HOURS = 24           # extra boost window for new uploads
+    NEW_POST_BOOST = 25
+
+    WEIGHT_FRESHNESS = 35.0
+    WEIGHT_RELEVANCE = 30.0
+    WEIGHT_POPULARITY = 20.0
+    WEIGHT_QUALITY = 10.0
+    EXPLORATION_JITTER_MAX = 5.0         # controlled randomisation
+
+    BEHAVIOUR_WINDOW_DAYS = 14           # look-back for viewing behaviour
+    COMPLETED_PENALTY = 45.0             # demote fully-watched lessons
+
+    MIN_INTEREST_THRESHOLD = 5.0
+
+    # ── Diversity constraints ───────────────────────────────────
+    MAX_CONSECUTIVE_SAME_TEACHER = 2
+    MAX_CONSECUTIVE_SAME_SUBJECT = 3
+    DIVERSITY_LOOKAHEAD = 12             # how far ahead to search for a swap
+
+    DISCOVERY_EVERY_N = 9                # inject a discovery post every N items
+    DISCOVERY_FRACTION = 0.08            # ~8% serendipitous content
+
+    # ════════════════════════════════════════════════════════════
+    # Snapshot management (stable ordering across pages)
+    # ════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _owner_key(user=None, guest_device_id: str = '') -> str:
+        if user and getattr(user, 'is_authenticated', False):
+            return f"user:{user.id}"
+        return f"guest:{guest_device_id or 'anon'}"
+
+    @staticmethod
+    def _snapshot_cache_key(owner_key: str, token: str) -> str:
+        return f"feed:blended-snapshot:{owner_key}:{token}"
+
+    @classmethod
+    def create_snapshot(
+        cls,
+        user=None,
+        guest_device_id: str = '',
+        school_id: Optional[int] = None,
+    ) -> Tuple[str, List[int]]:
+        """Build a fresh ranked id list and store it under a new token."""
+        ranked = cls.build_ranked_feed(
+            user=user, guest_device_id=guest_device_id, school_id=school_id,
+        )
+        token = uuid.uuid4().hex[:16]
+        owner = cls._owner_key(user, guest_device_id)
+        ids = [lesson.id for lesson in ranked][:cls.SNAPSHOT_MAX_IDS]
+        try:
+            cache.set(
+                cls._snapshot_cache_key(owner, token),
+                ids,
+                timeout=cls.SNAPSHOT_TTL_SECONDS,
+            )
+        except Exception:
+            logger.warning("Failed to persist blended feed snapshot", exc_info=True)
+        return token, ids
+
+    @classmethod
+    def get_snapshot(cls, user=None, guest_device_id: str = '', token: str = '') -> Optional[List[int]]:
+        """Return the stored ranked ids for a token, or None if expired."""
+        if not token:
+            return None
+        owner = cls._owner_key(user, guest_device_id)
+        try:
+            ids = cache.get(cls._snapshot_cache_key(owner, token))
+        except Exception:
+            return None
+        return ids if isinstance(ids, list) else None
+
+    # ════════════════════════════════════════════════════════════
+    # Ranking
+    # ════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _visible_queryset(school_id: Optional[int] = None):
+        qs = FeedLesson.objects.filter(
+            status='approved',
+            visibility='public',
+            published_at__isnull=False,
+        )
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+        return qs
+
+    @staticmethod
+    def _engagement_annotation():
+        """Live engagement fallback while scheduled trending scores catch up."""
+        return ExpressionWrapper(
+            F('view_count') * Value(1.0) +
+            F('unique_view_count') * Value(2.0) +
+            F('like_count') * Value(4.0) +
+            F('save_count') * Value(5.0) +
+            F('comment_count') * Value(3.0) +
+            F('share_count') * Value(6.0) +
+            F('completion_rate') * Value(10.0) +
+            F('avg_watch_seconds') * Value(0.1),
+            output_field=DecimalField(max_digits=18, decimal_places=6),
+        )
+
+    @classmethod
+    def build_ranked_feed(
+        cls,
+        user=None,
+        guest_device_id: str = '',
+        school_id: Optional[int] = None,
+    ) -> List[FeedLesson]:
+        """
+        Produce a fully ranked, diversity-spaced list of lessons.
+
+        Steps:
+          1. Pool candidates (recent + popular).
+          2. Gather interest / behavioural signals for this viewer.
+          3. Score each candidate in Python (freshness, relevance,
+             popularity, quality, exploration jitter).
+          4. Rank, interleave a discovery slice, then enforce diversity
+             spacing across teachers and subjects.
+        """
+        now = timezone.now()
+
+        # ── 1. Candidate pool ───────────────────────────────────
+        base_qs = cls._visible_queryset(school_id).prefetch_related('tags')
+
+        recent_qs = base_qs.order_by('-published_at', '-pk')[:cls.RECENT_POOL_SIZE]
+
+        popular_qs = base_qs.annotate(
+            live_engagement=cls._engagement_annotation(),
+        ).order_by('-live_engagement', '-trending_score', '-published_at', '-pk')[
+            :cls.POPULAR_POOL_SIZE
+        ]
+
+        candidates: Dict[int, FeedLesson] = {}
+        for lesson in list(recent_qs) + list(popular_qs):
+            candidates.setdefault(lesson.id, lesson)
+        if not candidates:
+            return []
+
+        # ── 2. Viewer signals ───────────────────────────────────
+        signals = cls._gather_signals(user, guest_device_id, now)
+
+        # ── 3. Score ────────────────────────────────────────────
+        scored: List[Tuple[float, int, FeedLesson]] = []
+        for lesson in candidates.values():
+            score = cls._score_lesson(lesson, signals, now)
+            scored.append((score, lesson.id, lesson))
+
+        scored.sort(key=lambda item: (-item[0], -item[1]))
+        ranked: List[FeedLesson] = [item[2] for item in scored]
+
+        # ── 4a. Discovery interleaving ──────────────────────────
+        ranked = cls._interleave_discovery(ranked, base_qs, signals['seen_ids'])
+
+        # ── 4b. Diversity spacing ───────────────────────────────
+        return cls.apply_diversity_spacing(ranked)
+
+    @staticmethod
+    def _gather_signals(user, guest_device_id: str, now) -> dict:
+        """Collect interest + behavioural signals for the viewer."""
+        interests = InterestScoringService.get_top_interest_ids(
+            user=user, guest_device_id=guest_device_id,
+            min_score=PersonalizedRecommendationService.MIN_INTEREST_THRESHOLD,
+        )
+        subject_ids = set(interests.get(InterestDomain.SUBJECT, []))
+        teacher_ids = set(interests.get(InterestDomain.TEACHER, []))
+        tag_ids = set(interests.get(InterestDomain.TAG, []))
+        level_id = (
+            interests.get(InterestDomain.LEVEL, [None])[0]
+            if interests.get(InterestDomain.LEVEL) else None
+        )
+        class_id = (
+            interests.get(InterestDomain.CLASS_OBJ, [None])[0]
+            if interests.get(InterestDomain.CLASS_OBJ) else None
+        )
+
+        # Onboarding preferences (for users with little history yet).
+        if user and getattr(user, 'is_authenticated', False):
+            profile = getattr(user, 'learning_profile', None)
+            if profile:
+                subject_ids.update(profile.preferred_subjects.values_list('id', flat=True))
+                level_id = level_id or profile.preferred_level_id
+                class_id = class_id or profile.preferred_class_id
+
+            from apps.feed.models import TeacherFollower
+            teacher_ids.update(
+                TeacherFollower.objects.filter(user=user).values_list('teacher_id', flat=True)
+            )
+
+        prioritize_behavioural = InterestScoringService.should_prioritize_behavioural(
+            user=user, guest_device_id=guest_device_id,
+        )
+
+        # Previous viewing behaviour: subjects of recently watched lessons,
+        # plus lessons already watched to completion (to be demoted).
+        seen_ids: set = set()
+        completed_ids: set = set()
+        behaviour_subject_ids: set = set()
+        try:
+            viewer_q = Q()
+            if user and getattr(user, 'is_authenticated', False):
+                viewer_q |= Q(user=user)
+            if guest_device_id:
+                viewer_q |= Q(guest_device_id=guest_device_id)
+
+            if viewer_q:
+                cutoff = now - timedelta(days=PersonalizedRecommendationService.BEHAVIOUR_WINDOW_DAYS)
+                interactions = UserInteraction.objects.filter(
+                    viewer_q,
+                    created_at__gte=cutoff,
+                ).values_list('lesson_id', 'interaction_type')[:1000]
+                for lesson_id, interaction_type in interactions:
+                    seen_ids.add(lesson_id)
+                    if interaction_type == InteractionType.WATCH_COMPLETE:
+                        completed_ids.add(lesson_id)
+
+                if seen_ids:
+                    behaviour_subject_ids = set(
+                        FeedLesson.objects.filter(id__in=list(seen_ids))
+                        .exclude(subject_id=None)
+                        .values_list('subject_id', flat=True)
+                    )
+        except Exception:
+            logger.debug("Behavioural signal gathering failed", exc_info=True)
+
+        return {
+            'subject_ids': subject_ids,
+            'teacher_ids': teacher_ids,
+            'tag_ids': tag_ids,
+            'level_id': level_id,
+            'class_id': class_id,
+            'prioritize_behavioural': prioritize_behavioural,
+            'seen_ids': seen_ids,
+            'completed_ids': completed_ids,
+            'behaviour_subject_ids': behaviour_subject_ids,
+        }
+
+    @classmethod
+    def _score_lesson(cls, lesson: FeedLesson, signals: dict, now) -> float:
+        """Composite 0-100 recommendation score for a single lesson."""
+        # ── Freshness (exponential decay, new-upload boost) ─────
+        published_at = lesson.published_at or lesson.created_at
+        age_hours = max(0.0, (now - published_at).total_seconds() / 3600.0)
+        freshness = 100.0 * math.pow(0.5, age_hours / cls.FRESHNESS_HALF_LIFE_HOURS)
+        if age_hours <= cls.NEW_POST_WINDOW_HOURS:
+            freshness = min(100.0, freshness + cls.NEW_POST_BOOST)
+
+        # ── Relevance (interests + viewing behaviour) ───────────
+        relevance = 0.0
+        if lesson.subject_id and lesson.subject_id in signals['subject_ids']:
+            relevance += 30.0
+        elif lesson.subject_id and lesson.subject_id in signals['behaviour_subject_ids']:
+            relevance += 18.0
+        if lesson.teacher_id and lesson.teacher_id in signals['teacher_ids']:
+            relevance += 25.0
+        if signals['level_id'] and lesson.level_id == signals['level_id']:
+            relevance += 15.0
+        if signals['class_id'] and lesson.class_obj_id == signals['class_id']:
+            relevance += 15.0
+        if signals['tag_ids']:
+            lesson_tag_ids = {tag.id for tag in lesson.tags.all()}
+            if lesson_tag_ids & signals['tag_ids']:
+                relevance += 15.0
+        relevance = min(relevance, 100.0)
+        if signals['prioritize_behavioural']:
+            relevance = min(relevance * 1.5, 100.0)
+
+        # ── Popularity (log-scaled engagement) ──────────────────
+        popularity = min(
+            100.0,
+            math.log10(1 + max(0, lesson.view_count)) * 15.0 +
+            math.log10(1 + max(0, lesson.like_count)) * 20.0 +
+            math.log10(1 + max(0, lesson.comment_count)) * 12.0 +
+            math.log10(1 + max(0, lesson.share_count)) * 18.0 +
+            math.log10(1 + max(0, lesson.save_count)) * 14.0,
+        )
+
+        # ── Quality (completion + watch-through signals) ────────
+        quality = (
+            float(lesson.completion_rate or 0) * 0.6 +
+            float(lesson.quality_score or 0) * 0.4
+        )
+
+        # ── Exploration jitter (controlled randomisation) ───────
+        jitter = random.uniform(0.0, cls.EXPLORATION_JITTER_MAX)
+
+        score = (
+            freshness * (cls.WEIGHT_FRESHNESS / 100.0) +
+            relevance * (cls.WEIGHT_RELEVANCE / 100.0) +
+            popularity * (cls.WEIGHT_POPULARITY / 100.0) +
+            quality * (cls.WEIGHT_QUALITY / 100.0) +
+            jitter
+        )
+
+        # Demote lessons the viewer already watched to completion so the
+        # feed surfaces fresh material first (they can still reappear later).
+        if lesson.id in signals['completed_ids']:
+            score -= cls.COMPLETED_PENALTY
+
+        return score
+
+    @classmethod
+    def _interleave_discovery(
+        cls,
+        ranked: List[FeedLesson],
+        base_qs,
+        exclude_ids: set,
+    ) -> List[FeedLesson]:
+        """Inject ~8% serendipitous quality content into the ranked list."""
+        existing_ids = {lesson.id for lesson in ranked}
+        target_count = max(1, int(len(ranked) * cls.DISCOVERY_FRACTION))
+
+        discovery_pool = list(
+            base_qs.filter(quality_score__gte=40)
+            .exclude(id__in=list(existing_ids | exclude_ids))
+            .order_by('?')
+            .values_list('id', flat=True)[:target_count * 2]
+        )
+        if not discovery_pool:
+            return ranked
+
+        random.shuffle(discovery_pool)
+
+        result: List[FeedLesson] = []
+        discovery_iter = iter(discovery_pool)
+        for index, lesson in enumerate(ranked):
+            result.append(lesson)
+            if (index + 1) % cls.DISCOVERY_EVERY_N == 0:
+                discovery_id = next(discovery_iter, None)
+                if discovery_id is not None and discovery_id not in existing_ids:
+                    discovered = FeedLesson.objects.filter(id=discovery_id).first()
+                    if discovered is not None:
+                        result.append(discovered)
+                        existing_ids.add(discovery_id)
+        return result
+
+    @classmethod
+    def apply_diversity_spacing(cls, ranked: List[FeedLesson]) -> List[FeedLesson]:
+        """
+        Greedy reorder enforcing limits on consecutive same-teacher /
+        same-subject runs, searching a small lookahead window for a
+        replacement when a constraint would be violated.
+        """
+        result: List[FeedLesson] = []
+        pending = list(ranked)
+
+        while pending:
+            placed = False
+            window = pending[:cls.DIVERSITY_LOOKAHEAD]
+            for offset, candidate in enumerate(window):
+                if cls._can_append(result, candidate):
+                    result.append(pending.pop(offset))
+                    placed = True
+                    break
+            if not placed:
+                # Constraints cannot be satisfied within the lookahead;
+                # take the next best item anyway.
+                result.append(pending.pop(0))
+        return result
+
+    @classmethod
+    def _can_append(cls, result: List[FeedLesson], candidate: FeedLesson) -> bool:
+        teacher_run = 0
+        subject_run = 0
+        for lesson in reversed(result):
+            if lesson.teacher_id == candidate.teacher_id:
+                teacher_run += 1
+            else:
+                break
+        if teacher_run >= cls.MAX_CONSECUTIVE_SAME_TEACHER:
+            return False
+
+        for lesson in reversed(result):
+            if lesson.subject_id and lesson.subject_id == candidate.subject_id:
+                subject_run += 1
+            else:
+                break
+        if subject_run >= cls.MAX_CONSECUTIVE_SAME_SUBJECT:
+            return False
+        return True
+
+    # ════════════════════════════════════════════════════════════
+    # Backwards-compatible entry point (page-based callers)
+    # ════════════════════════════════════════════════════════════
 
     @staticmethod
     def get_blended_feed(
@@ -81,320 +447,24 @@ class PersonalizedRecommendationService:
         school_id: Optional[int] = None,
     ) -> List[FeedLesson]:
         """
-        Generate a blended feed with 70/20/10 composition.
-
-        Returns a flat list of FeedLesson IDs ordered by recommendation score
-        within each bucket, interleaved to provide variety.
+        Legacy page-based API retained for compatibility. New callers
+        should use create_snapshot()/get_snapshot() for stable cursored
+        pagination.
         """
-        total_needed = page * page_size
-        per_page_fetch = page_size * 3  # fetch extra to allow dedup
-
-        personalized = PersonalizedRecommendationService._get_personalized_bucket(
-            user=user, guest_device_id=guest_device_id,
-            limit=max(per_page_fetch, 50),
-            school_id=school_id,
+        _, ids = PersonalizedRecommendationService.create_snapshot(
+            user=user, guest_device_id=guest_device_id, school_id=school_id,
         )
-        trending = PersonalizedRecommendationService._get_trending_bucket(
-            user=user, guest_device_id=guest_device_id,
-            limit=max(per_page_fetch, 30),
-            school_id=school_id,
-        )
-        discovery = PersonalizedRecommendationService._get_discovery_bucket(
-            user=user, guest_device_id=guest_device_id,
-            limit=max(per_page_fetch, 20),
-            school_id=school_id,
-        )
-
-        # Blend: interleave 70/20/10 with dedup
-        seen_ids: set = set()
-        blended: List[FeedLesson] = []
-
-        max_len = max(len(personalized), len(trending), len(discovery))
-        p_idx, t_idx, d_idx = 0, 0, 0
-
-        while len(blended) < total_needed and (p_idx < len(personalized) or t_idx < len(trending) or d_idx < len(discovery)):
-            # Add 3-4 personalized items
-            for _ in range(3):
-                if p_idx < len(personalized):
-                    lesson = personalized[p_idx]
-                    p_idx += 1
-                    if lesson.id not in seen_ids:
-                        seen_ids.add(lesson.id)
-                        blended.append(lesson)
-
-            # Add 1 trending item
-            if t_idx < len(trending):
-                lesson = trending[t_idx]
-                t_idx += 1
-                if lesson.id not in seen_ids:
-                    seen_ids.add(lesson.id)
-                    blended.append(lesson)
-
-            # Add 1 discovery item (every other block, to maintain ~10%)
-            if d_idx < len(discovery) and len(blended) % 3 == 0:
-                lesson = discovery[d_idx]
-                d_idx += 1
-                if lesson.id not in seen_ids:
-                    seen_ids.add(lesson.id)
-                    blended.append(lesson)
-
-        # Trim to requested size
-        return blended[:total_needed]
-
-    # ─── Personalized bucket (70%) ──────────────────────────────
+        page_ids = ids[(page - 1) * page_size: page * page_size]
+        return PersonalizedRecommendationService.fetch_lessons_ordered(page_ids)
 
     @staticmethod
-    def _get_personalized_bucket(
-        user=None,
-        guest_device_id: str = '',
-        limit: int = 50,
-        school_id: Optional[int] = None,
-    ) -> List[FeedLesson]:
-        """
-        Return lessons ranked by personalized recommendation score.
-
-        The score is a weighted composite of:
-          1. Preference match (from interest scores + onboarding)
-          2. Popularity (trending_score, view_count, like_count)
-          3. Freshness (recency bonus)
-          4. Recent engagement (boost for recently interacted-with content)
-        """
-        base_qs = FeedLesson.objects.filter(
-            status='approved',
-            visibility='public',
-            published_at__isnull=False,
-        )
-
-        if school_id:
-            base_qs = base_qs.filter(school_id=school_id)
-
-        # ── Get interest signals ────────────────────────────────
-        interests = InterestScoringService.get_top_interest_ids(
-            user=user, guest_device_id=guest_device_id,
-            min_score=MIN_INTEREST_THRESHOLD,
-        )
-        subject_ids = set(interests.get(InterestDomain.SUBJECT, []))
-        teacher_ids = set(interests.get(InterestDomain.TEACHER, []))
-        level_id = interests.get(InterestDomain.LEVEL, [None])[0] if interests.get(InterestDomain.LEVEL) else None
-        class_id = interests.get(InterestDomain.CLASS_OBJ, [None])[0] if interests.get(InterestDomain.CLASS_OBJ) else None
-        tag_ids = set(interests.get(InterestDomain.TAG, []))
-
-        # Also include onboarding preferences for users who just started
-        if user and user.is_authenticated:
-            profile = getattr(user, 'learning_profile', None)
-            if profile:
-                onboarding_subjects = list(profile.preferred_subjects.values_list('id', flat=True))
-                subject_ids.update(onboarding_subjects)
-                if profile.preferred_level_id and level_id is None:
-                    level_id = profile.preferred_level_id
-                if profile.preferred_class_id and class_id is None:
-                    class_id = profile.preferred_class_id
-
-            # Followed teachers
-            from apps.feed.models import TeacherFollower
-            followed = TeacherFollower.objects.filter(user=user).values_list('teacher_id', flat=True)
-            teacher_ids.update(followed)
-
-        # ── Check if behavioural data should dominate ───────────
-        should_prioritize_behavioural = InterestScoringService.should_prioritize_behavioural(
-            user=user, guest_device_id=guest_device_id
-        )
-
-        # ── Build candidate query based on interest signals ─────
-        if subject_ids or teacher_ids or level_id or class_id or tag_ids:
-            candidate_filters = Q()
-            if subject_ids:
-                candidate_filters |= Q(subject_id__in=list(subject_ids))
-            if teacher_ids:
-                candidate_filters |= Q(teacher_id__in=list(teacher_ids))
-            if level_id:
-                candidate_filters |= Q(level_id=level_id)
-            if class_id:
-                candidate_filters |= Q(class_obj_id=class_id)
-            if tag_ids:
-                candidate_filters |= Q(tags__id__in=list(tag_ids))
-
-            candidates = base_qs.filter(candidate_filters).distinct()
-        else:
-            # No signals yet — fall back to trending
-            logger.debug("No interest signals for user, falling back to trending for personalized bucket")
-            candidates = base_qs
-
-        # ── Compute composite score ─────────────────────────────
-        now = timezone.now()
-        freshness_cutoff = now - timedelta(days=FRESHNESS_WINDOW_DAYS)
-        recent_cutoff = now - timedelta(hours=RECENT_ENGAGEMENT_HOURS)
-
-        # Build preference match annotations
-        pref_annotations = {}
-
-        pref_annotations['pref_subject'] = Case(
-            When(subject_id__in=list(subject_ids), then=Value(Decimal(20), output_field=DecimalField(max_digits=10, decimal_places=2))),
-            default=Value(Decimal(0), output_field=DecimalField(max_digits=10, decimal_places=2)),
-            output_field=DecimalField(max_digits=10, decimal_places=2),
-        ) if subject_ids else Value(Decimal(0), output_field=DecimalField(max_digits=10, decimal_places=2))
-
-        pref_annotations['pref_teacher'] = Case(
-            When(teacher_id__in=list(teacher_ids), then=Value(Decimal(25), output_field=DecimalField(max_digits=10, decimal_places=2))),
-            default=Value(Decimal(0), output_field=DecimalField(max_digits=10, decimal_places=2)),
-            output_field=DecimalField(max_digits=10, decimal_places=2),
-        ) if teacher_ids else Value(Decimal(0), output_field=DecimalField(max_digits=10, decimal_places=2))
-
-        pref_annotations['pref_level'] = Case(
-            When(level_id=level_id, then=Value(Decimal(15), output_field=DecimalField(max_digits=10, decimal_places=2))),
-            default=Value(Decimal(0), output_field=DecimalField(max_digits=10, decimal_places=2)),
-            output_field=DecimalField(max_digits=10, decimal_places=2),
-        ) if level_id else Value(Decimal(0), output_field=DecimalField(max_digits=10, decimal_places=2))
-
-        pref_annotations['pref_class'] = Case(
-            When(class_obj_id=class_id, then=Value(Decimal(15), output_field=DecimalField(max_digits=10, decimal_places=2))),
-            default=Value(Decimal(0), output_field=DecimalField(max_digits=10, decimal_places=2)),
-            output_field=DecimalField(max_digits=10, decimal_places=2),
-        ) if class_id else Value(Decimal(0), output_field=DecimalField(max_digits=10, decimal_places=2))
-
-        pref_annotations['freshness_bonus'] = Case(
-            When(published_at__gte=freshness_cutoff,
-                 then=Value(FRESHNESS_BONUS, output_field=DecimalField(max_digits=10, decimal_places=2))),
-            default=Value(Decimal(0), output_field=DecimalField(max_digits=10, decimal_places=2)),
-            output_field=DecimalField(max_digits=10, decimal_places=2),
-        )
-
-        pref_annotations['pop_score'] = ExpressionWrapper(
-            F('trending_score') * Value(Decimal('0.5')) +
-            F('view_count') * Value(Decimal('0.01')) +
-            F('like_count') * Value(Decimal('0.02')) +
-            F('completion_rate') * Value(Decimal('0.1')),
-            output_field=DecimalField(max_digits=18, decimal_places=6),
-        )
-
-        # Behavioural override multiplier
-        if should_prioritize_behavioural:
-            pref_annotations['pref_multiplier'] = Value(Decimal('2.0'), output_field=DecimalField(max_digits=5, decimal_places=2))
-        else:
-            pref_annotations['pref_multiplier'] = Value(Decimal('1.0'), output_field=DecimalField(max_digits=5, decimal_places=2))
-
-        candidates = candidates.annotate(**pref_annotations)
-
-        # Composite recommendation score
-        candidates = candidates.annotate(
-            rec_score=(
-                # Preference match (35%)
-                (F('pref_subject') + F('pref_teacher') + F('pref_level') + F('pref_class'))
-                * F('pref_multiplier') * Value(WEIGHT_PREFERENCE_MATCH)
-                # Popularity (25%)
-                + F('pop_score') * Value(WEIGHT_POPULARITY)
-                # Freshness (20%)
-                + F('freshness_bonus') * Value(WEIGHT_FRESHNESS)
-            )
-        ).order_by('-rec_score', '-trending_score', '-published_at')
-
-        return list(candidates[:limit])
-
-    # ─── Trending bucket (20%) ──────────────────────────────────
-
-    @staticmethod
-    def _get_trending_bucket(
-        user=None,
-        guest_device_id: str = '',
-        limit: int = 30,
-        school_id: Optional[int] = None,
-    ) -> List[FeedLesson]:
-        """
-        Return trending educational videos based on platform-wide popularity.
-        Considers trending_score, view velocity, and recent engagement.
-        """
-        qs = FeedLesson.objects.filter(
-            status='approved',
-            visibility='public',
-            published_at__isnull=False,
-        )
-        if school_id:
-            qs = qs.filter(school_id=school_id)
-
-        # Compute an engagement velocity score that favours recent activity
-        # We use the existing trending_score as a base but also boost by
-        # view_count and completion_rate for quality signals.
-        qs = qs.annotate(
-            trending_rank=(
-                F('trending_score') * Value(Decimal('1.0')) +
-                F('view_count') * Value(Decimal('0.05')) +
-                F('like_count') * Value(Decimal('0.1')) +
-                F('completion_rate') * Value(Decimal('0.5')) +
-                F('share_count') * Value(Decimal('0.3'))
-            )
-        ).order_by('-trending_rank', '-trending_score', '-published_at')
-
-        return list(qs[:limit])
-
-    # ─── Discovery bucket (10%) ─────────────────────────────────
-
-    @staticmethod
-    def _get_discovery_bucket(
-        user=None,
-        guest_device_id: str = '',
-        limit: int = 20,
-        school_id: Optional[int] = None,
-    ) -> List[FeedLesson]:
-        """
-        Return random / serendipitous videos for discovery.
-
-        Uses a weighted random selection that favours higher-quality content
-        (quality_score >= 60) but provides diversity across subjects and teachers.
-        """
-        qs = FeedLesson.objects.filter(
-            status='approved',
-            visibility='public',
-            published_at__isnull=False,
-        )
-        if school_id:
-            qs = qs.filter(school_id=school_id)
-
-        # Exclude recently watched content for better discovery
-        if user and user.is_authenticated:
-            watched_ids = UserInteraction.objects.filter(
-                user=user,
-                interaction_type__in=[
-                    InteractionType.WATCH_COMPLETE,
-                    InteractionType.WATCH_START,
-                ],
-            ).values_list('lesson_id', flat=True).distinct()
-            qs = qs.exclude(id__in=list(watched_ids))
-
-        # Prefer quality content but add randomness
-        # Get a larger pool from quality content, then randomise
-        discovery_pool = qs.filter(
-            quality_score__gte=Decimal('40.00'),
-        ).order_by('?')[:limit * 3]
-
-        # If we don't have enough quality content, fill from the rest
-        if len(discovery_pool) < limit:
-            remaining = limit - len(discovery_pool)
-            extra = qs.exclude(
-                id__in=[l.id for l in discovery_pool]
-            ).order_by('?')[:remaining]
-            discovery_pool = list(discovery_pool) + list(extra)
-
-        # Shuffle for true randomness
-        result = list(discovery_pool)
-        random.shuffle(result)
-
-        return result[:limit]
-
-    # ─── Cache management ───────────────────────────────────────
-
-    @staticmethod
-    def get_cache_key(user=None, guest_device_id: str = '', school_id: Optional[int] = None) -> str:
-        uid = str(user.id) if user and user.is_authenticated else guest_device_id
-        return f"feed:blended:{uid}:{school_id or 'global'}"
-
-    @staticmethod
-    def invalidate_caches(user=None, guest_device_id: str = ''):
-        """Invalidate the blended feed cache for a user/guest."""
-        from django.core.cache import cache
-        try:
-            client = cache.client.get_client()
-            uid = str(user.id) if user and user.is_authenticated else guest_device_id
-            for key in client.scan_iter(match=f"feed:blended:{uid}:*"):
-                client.delete(key)
-        except Exception:
-            pass
+    def fetch_lessons_ordered(ids: List[int]) -> List[FeedLesson]:
+        """Fetch lessons preserving the given id order."""
+        if not ids:
+            return []
+        lessons = {
+            lesson.id: lesson
+            for lesson in FeedLesson.objects.filter(id__in=ids)
+                .prefetch_related('tags')
+        }
+        return [lessons[lid] for lid in ids if lid in lessons]
