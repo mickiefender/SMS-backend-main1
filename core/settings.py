@@ -277,14 +277,25 @@ REST_FRAMEWORK = {
 }
 
 # JWT Configuration
+#
+# Short-lived access token + long-lived refresh token: the mobile client
+# transparently renews an expired access token via POST /api/users/auth/refresh/
+# (SimpleJWT TokenRefreshView) and retries the failed request, so a short
+# lifetime here costs nothing in UX while shrinking the window in which a
+# leaked/stolen access token remains usable from 24 hours to 30 minutes.
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     # Rotation + blacklisting is disabled because
     # `rest_framework_simplejwt.token_blacklist` is not installed. With
     # ROTATE_REFRESH_TOKENS=True and no blacklist app, the refresh endpoint
     # crashes trying to blacklist the old token. The mobile client keeps the
     # same refresh token for its full 7-day lifetime, which is safe.
+    # NOTE: if you later install 'rest_framework_simplejwt.token_blacklist'
+    # and run its migrations, set ROTATE_REFRESH_TOKENS=True +
+    # BLACKLIST_AFTER_ROTATION=True for proper refresh-token revocation —
+    # the Flutter client already persists rotated refresh tokens when
+    # present in the refresh response.
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': False,
     'ALGORITHM': 'HS256',

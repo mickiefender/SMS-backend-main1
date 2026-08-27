@@ -345,6 +345,7 @@ class FeedCommentSerializer(serializers.ModelSerializer):
     parent_comment_id = serializers.IntegerField(source='parent_id', read_only=True)
     is_liked = serializers.SerializerMethodField()
     replies_count = serializers.IntegerField(source='replies.count', read_only=True)
+    replies = serializers.SerializerMethodField()
 
     class Meta:
         model = models.FeedComment
@@ -353,7 +354,7 @@ class FeedCommentSerializer(serializers.ModelSerializer):
             'user_profile_picture', 'user_school_logo',
             'parent', 'parent_comment_id', 'body', 'content', 'is_pinned',
             'is_moderated', 'is_deleted', 'like_count', 'is_liked',
-            'replies_count', 'created_at', 'updated_at',
+            'replies_count', 'replies', 'created_at', 'updated_at',
         ]
         read_only_fields = [
             'id', 'lesson', 'lesson_id', 'user', 'user_id', 'user_name',
@@ -381,6 +382,20 @@ class FeedCommentSerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return None
+
+    def get_replies(self, obj):
+        # Nest replies up to 2 levels to avoid unbounded recursion while
+        # still showing threads. Depth is threaded through the context.
+        depth = self.context.get('replies_depth', 1)
+        if depth > 2:
+            return []
+        qs = obj.replies.all().order_by('created_at')
+        serializer = FeedCommentSerializer(
+            qs,
+            many=True,
+            context={**self.context, 'replies_depth': depth + 1},
+        )
+        return serializer.data
 
     def get_is_liked(self, obj):
         user = self.context.get('request').user if self.context.get('request') else None
@@ -430,15 +445,35 @@ class FeedReportSerializer(serializers.ModelSerializer):
 
 class FeedNotificationSerializer(serializers.ModelSerializer):
     actor_name = serializers.CharField(source='actor.get_full_name', read_only=True)
+    actor_profile_picture = serializers.SerializerMethodField()
+    actor_school_logo = serializers.SerializerMethodField()
 
     class Meta:
         model = models.FeedNotification
         fields = [
             'id', 'notification_type', 'title', 'message', 'lesson', 'comment',
-            'actor', 'actor_name', 'related_object_type', 'related_object_id',
+            'actor', 'actor_name', 'actor_profile_picture', 'actor_school_logo',
+            'related_object_type', 'related_object_id',
             'is_read', 'priority', 'created_at', 'read_at',
         ]
         read_only_fields = fields
+
+    def get_actor_profile_picture(self, obj):
+        try:
+            profile_pic = getattr(obj.actor, 'profile_picture', None)
+            if profile_pic:
+                return profile_pic.display_url
+        except Exception:
+            pass
+        return None
+
+    def get_actor_school_logo(self, obj):
+        try:
+            if obj.actor and obj.actor.school:
+                return obj.actor.school.get_logo_url()
+        except Exception:
+            pass
+        return None
 
 
 class WatchHistorySerializer(serializers.ModelSerializer):
