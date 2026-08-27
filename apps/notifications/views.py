@@ -203,6 +203,13 @@ class SendNotificationView(APIView):
             from apps.schools.models import School
             try:
                 school = School.objects.get(id=data['school_id'])
+                # School announcements reach everyone in the school
+                # (students AND teachers), other categories default to students.
+                target_roles = None
+                if category == 'school_announcement':
+                    target_roles = ['student', 'teacher']
+                else:
+                    target_roles = ['student']
                 results = notification_service.send_notification_to_school(
                     school=school,
                     notification_type=notification_type,
@@ -212,7 +219,7 @@ class SendNotificationView(APIView):
                     target_screen=target_screen,
                     target_id=target_id,
                     priority=priority,
-                    target_roles=['student'],
+                    target_roles=target_roles,
                 )
                 created_count += len(results)
             except School.DoesNotExist:

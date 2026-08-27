@@ -111,43 +111,60 @@ def clean_invalid_devices():
 @shared_task
 def send_daily_learning_reminders():
     """
-    Send daily learning reminders to students who haven't engaged today.
-    Runs via Celery Beat (e.g. daily at 16:00).
+    Send personalised daily learning reminders to students and teachers.
+
+    This task is scheduled via Celery Beat (e.g. every hour). It:
+      * respects each user's preferred reminder time (daily_reminder_time,
+        default 16:00 UTC) — only fires when the current hour matches;
+      * honours the master toggle + daily_reminder category preference;
+      * never sends more than once per day per user
+        (last_daily_reminder_at guard);
+      * composes a single, prioritised, personalised notification via
+        daily_reminder_service.
     """
-    from apps.feed.models import WatchHistory
+    from apps.notifications.services import daily_reminder_service
 
-    today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    active_today = WatchHistory.objects.filter(
-        last_watched_at__gte=today_start
-    ).values_list('user_id', flat=True).distinct()
+    now = timezone.now()
+    current_hour = now.hour
 
-    students = User.objects.filter(
-        role='student',
-        is_active=True,
-    ).exclude(id__in=active_today)
+    # Reasonable window: we send in the hour that matches the user's
+    # preferred time. Users with no explicit time default to 16:00 UTC.
+    default_hour = 16
+
+    candidates = User.objects.filter(is_active=True).filter(
+        role__in=['student', 'teacher']
+    )
 
     sent_count = 0
-    for student in students:
-        # Check preference before sending
+    for user in candidates:
         try:
-            prefs = NotificationPreference.objects.get(user=student)
-            if not prefs.is_category_enabled('daily_reminder'):
-                continue
+            prefs = NotificationPreference.objects.filter(user=user).first()
         except NotificationPreference.DoesNotExist:
-            pass
+            prefs = None
 
-        from apps.notifications.services.notification_service import send_notification
-        n = send_notification(
-            recipient=student,
-            notification_type='daily_learning_reminder',
-            category='daily_reminder',
-            title='Time to Learn! 🎓',
-            message='You haven\'t watched any lessons today. Check out your personalised feed!',
-            target_screen='feed',
-            priority='low',
-        )
-        if n:
-            sent_count += 1
+        # Master toggle.
+        if prefs is not None and not prefs.daily_reminder_enabled:
+            continue
+        # Category preference.
+        if prefs is not None and not prefs.is_category_enabled('daily_reminder'):
+            continue
+        # Once per day.
+        if prefs is not None and prefs.has_received_daily_reminder_today():
+            continue
+
+        preferred_hour = default_hour
+        if prefs is not None and prefs.daily_reminder_time is not None:
+            preferred_hour = prefs.daily_reminder_time.hour
+
+        if preferred_hour != current_hour:
+            continue
+
+        try:
+            n = daily_reminder_service.send_daily_reminder(user)
+            if n:
+                sent_count += 1
+        except Exception as e:
+            logger.warning('Daily reminder failed for user %s: %s', user.id, e)
 
     logger.info(f'Sent {sent_count} daily learning reminders')
     return sent_count

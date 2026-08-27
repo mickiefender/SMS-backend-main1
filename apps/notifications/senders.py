@@ -77,7 +77,7 @@ def notify_new_follower(teacher, follower):
     )
 
 
-# ─── School Announcements ────────────────────────────────────────────────────
+# ─── School Announcements & Notices ──────────────────────────────────────────
 
 def notify_school_announcement(announcement, school):
     """School-wide announcement."""
@@ -91,6 +91,45 @@ def notify_school_announcement(announcement, school):
         target_screen='announcement_view',
         target_id=str(announcement.id),
         priority=announcement.priority if hasattr(announcement, 'priority') else 'normal',
+    )
+
+
+def notify_notice_posted(notice):
+    """Notify an entire school about a newly posted notice/announcement."""
+    from apps.notifications.services.notification_service import send_notification_to_school
+    school = getattr(notice, 'school', None)
+    if school is None:
+        return []
+    return send_notification_to_school(
+        school=school,
+        notification_type='school_announcement',
+        category='school_announcement',
+        title=notice.title,
+        message=notice.content[:200],
+        target_screen='announcement_view',
+        target_id=str(notice.id),
+        priority='high' if getattr(notice, 'priority', 'medium') == 'high' else 'normal',
+    )
+
+
+def notify_school_event(event):
+    """Notify users in a school about an upcoming event/activity."""
+    from apps.notifications.services.notification_service import send_notification_to_school
+    school = getattr(event, 'school', None)
+    if school is None:
+        return []
+    when = event.event_date.strftime('%b %d, %Y')
+    if getattr(event, 'event_time', None):
+        when += f' at {event.event_time.strftime("%H:%M")}'
+    return send_notification_to_school(
+        school=school,
+        notification_type='school_event',
+        category='school_announcement',
+        title=f'Upcoming Event: {event.title}',
+        message=f'{event.title} is on {when}.',
+        target_screen='event_view',
+        target_id=str(event.id),
+        priority='normal',
     )
 
 
@@ -135,6 +174,24 @@ def notify_grade_posted(student, subject_name, grade, term):
         message=f'Your grade for {subject_name} ({term}) has been posted: {grade}',
         target_screen='grade_view',
         target_id=str(student.id),
+        priority='high',
+    )
+
+
+def notify_exam_result_posted(result):
+    """Notify a student that their exam result has been recorded."""
+    subject_name = result.exam.subject.name if result.exam.subject else 'a subject'
+    return send_notification(
+        recipient=result.student,
+        notification_type='grade_posted',
+        category='grade',
+        title=f'Grade Posted: {subject_name}',
+        message=(
+            f'Your grade for {subject_name} has been posted: '
+            f'{result.grade or "N/A"} ({result.percentage:.0f}%).'
+        ),
+        target_screen='grade_view',
+        target_id=str(result.id),
         priority='high',
     )
 

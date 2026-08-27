@@ -158,3 +158,46 @@ def fee_created(sender, instance, created, **kwargs):
         )
     except Exception as e:
         logger.error(f'Failed to send fee notification: {e}')
+
+
+# ─── School Announcements / Notices / Events ─────────────────────────────────
+
+@receiver(post_save, sender='academics.Notice')
+def notice_posted(sender, instance, created, **kwargs):
+    """When a new school notice/announcement is posted, notify the school."""
+    if not created:
+        return
+
+    try:
+        from apps.notifications.senders import notify_notice_posted
+        notify_notice_posted(instance)
+    except Exception as e:
+        logger.error(f'Failed to send notice notification: {e}')
+
+
+@receiver(post_save, sender='academics.SchoolEvent')
+def school_event_created(sender, instance, created, **kwargs):
+    """When a new school event is created, notify the school."""
+    if not created:
+        return
+
+    try:
+        from apps.notifications.senders import notify_school_event
+        notify_school_event(instance)
+    except Exception as e:
+        logger.error(f'Failed to send school event notification: {e}')
+
+
+# ─── Exam / Grading Signals ──────────────────────────────────────────────────
+
+@receiver(post_save, sender='academics.ExamResult')
+def exam_result_saved(sender, instance, created, **kwargs):
+    """When an exam result is recorded, notify the student."""
+    if not created:
+        return
+
+    try:
+        from apps.notifications.senders import notify_exam_result_posted
+        notify_exam_result_posted(instance)
+    except Exception as e:
+        logger.error(f'Failed to send exam result notification: {e}')

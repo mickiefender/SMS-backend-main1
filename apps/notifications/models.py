@@ -87,6 +87,13 @@ class NotificationPreference(models.Model):
     email_enabled = models.BooleanField(default=True)
     quiet_hours_start = models.TimeField(null=True, blank=True)
     quiet_hours_end = models.TimeField(null=True, blank=True)
+    # ── Daily Learning Reminder ──────────────────────────────────
+    # Master toggle for the personalised daily learning reminder.
+    daily_reminder_enabled = models.BooleanField(default=True)
+    # Preferred local time for the daily reminder (null → default 16:00 UTC).
+    daily_reminder_time = models.TimeField(null=True, blank=True)
+    # Tracks when the last daily reminder was sent so we never spam (once/day).
+    last_daily_reminder_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -102,6 +109,25 @@ class NotificationPreference(models.Model):
         """Check if a notification category is enabled for this user."""
         cat_prefs = self.preferences.get('categories', {})
         return cat_prefs.get(category, True) is not False
+
+    def is_daily_reminder_enabled(self) -> bool:
+        """True when the user wants daily reminders (master toggle + category)."""
+        return (
+            self.daily_reminder_enabled
+            and self.is_category_enabled('daily_reminder')
+        )
+
+    def has_received_daily_reminder_today(self) -> bool:
+        """True if a daily reminder was already sent to this user today."""
+        if not self.last_daily_reminder_at:
+            return False
+        from django.utils import timezone
+        now = timezone.now()
+        return (
+            self.last_daily_reminder_at.year == now.year
+            and self.last_daily_reminder_at.month == now.month
+            and self.last_daily_reminder_at.day == now.day
+        )
 
 
 # ---------------------------------------------------------------------------

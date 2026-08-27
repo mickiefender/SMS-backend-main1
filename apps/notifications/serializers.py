@@ -85,8 +85,16 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'user', 'preferences', 'push_enabled', 'email_enabled',
             'quiet_hours_start', 'quiet_hours_end', 'created_at', 'updated_at',
+            # ── Daily Learning Reminder ──────────────────────
+            'daily_reminder_enabled',
+            'daily_reminder_time',
+            'last_daily_reminder_at',
         ]
-        read_only_fields = ['id', 'user', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at', 'last_daily_reminder_at']
+        extra_kwargs = {
+            'daily_reminder_time': {'required': False, 'allow_null': True},
+            'daily_reminder_enabled': {'required': False},
+        }
 
     def update(self, instance, validated_data):
         for attr, value in validated_data.items():
