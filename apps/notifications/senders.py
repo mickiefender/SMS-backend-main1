@@ -196,6 +196,36 @@ def notify_exam_result_posted(result):
     )
 
 
+def notify_grade_posted_from_grade(grade):
+    """
+    Notify a student that their Grade (students.Grade) was posted/updated.
+
+    This is the model the teacher grading flow (assessment bulk_save_scores)
+    writes to. Covers exam, test, quiz, assignment, continuous assessment,
+    class exercise and project grades.
+    """
+    subject_name = grade.subject.name if grade.subject else 'a subject'
+    if grade.assessment_id and grade.assessment.title:
+        assessment_label = grade.assessment.title
+    else:
+        assessment_label = grade.get_assessment_type_display()
+
+    message = (
+        f'Your grade for {assessment_label} ({subject_name}) has been posted: '
+        f'{grade.grade or "N/A"} ({grade.percentage:.1f}%).'
+    )
+    return send_notification(
+        recipient=grade.student,
+        notification_type='grade_posted',
+        category='grade',
+        title=f'Grade Posted: {subject_name}',
+        message=message,
+        target_screen='grade_view',
+        target_id=str(grade.id),
+        priority='high',
+    )
+
+
 # ─── Attendance ──────────────────────────────────────────────────────────────
 
 def notify_attendance_marked(student, date, status):

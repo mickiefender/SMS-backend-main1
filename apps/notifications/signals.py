@@ -8,7 +8,7 @@ This connects to post_save/post_delete signals from:
 - apps.billing: Fee models
 """
 import logging
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import post_save, post_delete, pre_save
 from django.dispatch import receiver
 from django.conf import settings
 
