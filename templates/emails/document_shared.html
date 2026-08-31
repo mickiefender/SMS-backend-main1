@@ -5,54 +5,83 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>New Document Shared - {{ school_name }}</title>
 </head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<body style="margin:0;padding:0;background-color:#EDEDED;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
     <tr>
-      <td style="padding:28px 14px;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:620px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+      <td style="padding:32px 16px;">
+        <!-- Header -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;margin:0 auto 24px auto;">
           <tr>
-            <td style="background:linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%);padding:28px 24px;text-align:center;color:#fff;">
+            <td align="left" style="vertical-align:middle;">
               {% if logo_url %}
-              <img src="{{ logo_url }}" alt="{{ school_name }} Logo" style="height:56px;max-width:180px;margin-bottom:10px;">
+                <img src="{{ logo_url }}" alt="{{ school_name }} Logo" style="height:40px;display:block;">
+              {% else %}
+                <span style="font-size:22px;font-weight:800;color:#AF0303;letter-spacing:-0.5px;">{{ school_name }}</span>
               {% endif %}
-              <h1 style="margin:0;font-size:24px;font-weight:700;">{{ school_name }}</h1>
-              <p style="margin:8px 0 0 0;opacity:0.95;">Class Document Notification</p>
+            </td>
+            <td align="right" style="vertical-align:middle;">
+              <a href="{{ frontend_url|default:'https://yourapp.com' }}/login" style="display:inline-block;padding:10px 24px;border:2px solid #AF0303;border-radius:8px;color:#AF0303;text-decoration:none;font-weight:700;font-size:14px;background-color:#FFFFFF;">Log In</a>
             </td>
           </tr>
+        </table>
+
+        <!-- Card -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;margin:0 auto;background-color:#FFFFFF;border-radius:16px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.08);">
           <tr>
-            <td style="padding:28px 24px;">
-              <h2 style="margin:0 0 12px 0;font-size:22px;color:#0f172a;">A New Document Has Been Shared</h2>
-              <p style="margin:0 0 16px 0;color:#334155;font-size:15px;line-height:1.7;">
+            <td style="padding:40px 32px;text-align:center;">
+              <!-- Hero -->
+              <div style="width:96px;height:96px;margin:0 auto 24px auto;border-radius:50%;background:linear-gradient(135deg,#AF0303 0%,#7A0000 100%);display:flex;align-items:center;justify-content:center;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="#FFFFFF"/><path d="M14 2v6h6" fill="none" stroke="#AF0303" stroke-width="2" stroke-linejoin="round"/><path d="M8 13h8M8 17h5" stroke="#AF0303" stroke-width="2" stroke-linecap="round"/></svg>
+              </div>
+
+              <div style="display:inline-block;background-color:#FDE8E8;color:#AF0303;padding:6px 16px;border-radius:20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:16px;">New Document</div>
+
+              <h1 style="margin:0 0 16px 0;font-size:28px;font-weight:800;color:#333333;line-height:1.3;">A New Document Has Been Shared</h1>
+
+              <p style="margin:0 auto 24px auto;max-width:480px;font-size:16px;line-height:1.7;color:#555555;text-align:center;">
                 A teacher has shared a new learning resource with your class. Please review the document details below and access it through your student portal.
               </p>
 
-              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;">
-                <p style="margin:0 0 8px 0;color:#64748b;font-size:13px;text-transform:uppercase;letter-spacing:.5px;">Document Title</p>
-                <p style="margin:0 0 14px 0;color:#0f172a;font-size:18px;font-weight:700;">{{ document_title }}</p>
-
-                <p style="margin:0 0 6px 0;color:#64748b;">Type: <strong style="color:#0f172a;">{{ document_type }}</strong></p>
-                <p style="margin:0 0 6px 0;color:#64748b;">Subject: <strong style="color:#0f172a;">{{ subject_name }}</strong></p>
-                <p style="margin:0 0 6px 0;color:#64748b;">Class: <strong style="color:#0f172a;">{{ class_name }}</strong></p>
-                <p style="margin:0;color:#64748b;">Shared By: <strong style="color:#0f172a;">{{ uploaded_by }}</strong></p>
-              </div>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:480px;margin:0 auto;background-color:#FAFAFA;border:1px solid #E5E5E5;border-radius:8px;padding:20px 24px;">
+                <tr>
+                  <td style="padding:8px 0;font-size:14px;color:#888888;">Document</td>
+                  <td style="padding:8px 0;font-size:14px;color:#333333;font-weight:600;text-align:right;">{{ document_title }}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;font-size:14px;color:#888888;">Type</td>
+                  <td style="padding:8px 0;font-size:14px;color:#333333;font-weight:600;text-align:right;">{{ document_type }}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;font-size:14px;color:#888888;">Subject</td>
+                  <td style="padding:8px 0;font-size:14px;color:#333333;font-weight:600;text-align:right;">{{ subject_name }}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;font-size:14px;color:#888888;">Class</td>
+                  <td style="padding:8px 0;font-size:14px;color:#333333;font-weight:600;text-align:right;">{{ class_name }}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;font-size:14px;color:#888888;">Shared By</td>
+                  <td style="padding:8px 0;font-size:14px;color:#333333;font-weight:600;text-align:right;">{{ uploaded_by }}</td>
+                </tr>
+              </table>
 
               {% if document_description %}
-              <div style="margin-top:16px;padding:14px;border-left:4px solid #2563eb;background:#eff6ff;border-radius:8px;color:#1e3a8a;">
+              <div style="max-width:480px;margin:20px auto 0 auto;text-align:left;background-color:#FFF5F5;border-left:4px solid #AF0303;padding:16px;border-radius:8px;font-size:15px;line-height:1.6;color:#7A0000;">
                 {{ document_description }}
               </div>
               {% endif %}
 
-              <div style="text-align:center;margin-top:22px;">
-                <a href="{{ documents_link|default:frontend_url|add:'/dashboard/student/documents' }}" style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600;">
-                  Open Class Documents
-                </a>
+              <div style="margin:28px 0 0 0;">
+                <a href="{{ documents_link|default:frontend_url|add:'/dashboard/student/documents' }}" style="display:inline-block;background-color:#AF0303;color:#FFFFFF;padding:14px 36px;text-decoration:none;border-radius:8px;font-weight:700;font-size:16px;">Open Class Documents</a>
               </div>
             </td>
           </tr>
           <tr>
-            <td style="padding:20px 24px;background:#f8fafc;color:#64748b;font-size:12px;text-align:center;">
-              <p style="margin:0;">This is an automated message from {{ school_name }}.</p>
-              <p style="margin:6px 0 0 0;">&copy; {% now "Y" %} {{ school_name }}. All rights reserved.</p>
+            <td style="padding:20px 32px;background-color:#FAFAFA;border-top:1px solid #E5E5E5;">
+              <p style="margin:0 0 8px 0;text-align:center;font-size:14px;color:#666666;">
+                <a href="[unsubscribe]" style="color:#666666;text-decoration:underline;">Unsubscribe</a>
+              </p>
+              <p style="margin:0;text-align:center;font-size:12px;color:#999999;">&copy; {{ 'now'|date:'Y' }} {{ school_name }}. All rights reserved.</p>
             </td>
           </tr>
         </table>

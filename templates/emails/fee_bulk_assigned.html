@@ -4,74 +4,71 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>New Fee Assigned - {{ school_name }}</title>
-  <style>
-    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; }
-    .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
-    .header { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 30px; text-align: center; color: white; }
-    .logo { height: 60px; max-width: 200px; margin-bottom: 10px; }
-    .school-name { font-size: 24px; font-weight: 700; margin: 0; }
-    .content { padding: 40px; }
-    .fee-amount { font-size: 36px; font-weight: 800; color: #dc2626; text-align: center; margin: 20px 0; }
-    .urgency { background: #fef2f2; border-left: 4px solid #dc2626; padding: 20px; margin: 24px 0; border-radius: 8px; }
-    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0; }
-    .detail-card { background: #f8fafc; padding: 20px; border-radius: 8px; text-align: center; }
-    .label { font-size: 14px; color: #64748b; font-weight: 500; }
-    .value { font-size: 20px; font-weight: 700; color: #1e293b; }
-    .pay-button { display: inline-block; background: #10b981; color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 18px; margin: 24px 0; box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
-    .footer { background: #f1f5f9; padding: 30px; text-align: center; font-size: 14px; color: #64748b; }
-    @media (max-width: 600px) { .detail-grid { grid-template-columns: 1fr; } .content { padding: 24px; } }
-  </style>
 </head>
-<body>
-  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<body style="margin:0;padding:0;background-color:#EDEDED;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
     <tr>
-      <td style="padding: 40px 20px;">
-        <table role="presentation" class="container" cellspacing="0" cellpadding="0" border="0">
+      <td style="padding:32px 16px;">
+        <!-- Header -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;margin:0 auto 24px auto;">
           <tr>
-            <td class="header">
+            <td align="left" style="vertical-align:middle;">
               {% if logo_url %}
-              <img src="{{ logo_url }}" alt="{{ school_name }} Logo" class="logo">
+                <img src="{{ logo_url }}" alt="{{ school_name }} Logo" style="height:40px;display:block;">
+              {% else %}
+                <span style="font-size:22px;font-weight:800;color:#AF0303;letter-spacing:-0.5px;">{{ school_name }}</span>
               {% endif %}
-              <h1 class="school-name">{{ school_name }}</h1>
-              <p style="margin: 0; opacity: 0.95; font-size: 18px;">💰 New Fee Assignment</p>
+            </td>
+            <td align="right" style="vertical-align:middle;">
+              <a href="{{ frontend_url|default:'https://yourapp.com' }}/login" style="display:inline-block;padding:10px 24px;border:2px solid #AF0303;border-radius:8px;color:#AF0303;text-decoration:none;font-weight:700;font-size:14px;background-color:#FFFFFF;">Log In</a>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Card -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;margin:0 auto;background-color:#FFFFFF;border-radius:16px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="padding:40px 32px;text-align:center;">
+              <!-- Hero -->
+              <div style="width:96px;height:96px;margin:0 auto 24px auto;border-radius:50%;background:linear-gradient(135deg,#AF0303 0%,#7A0000 100%);display:flex;align-items:center;justify-content:center;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="none"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z" fill="none" stroke="#FFFFFF" stroke-width="2"/><path d="M12 6v12M15 9.5c0-1.4-1.3-2.5-3-2.5s-3 1.1-3 2.5 1.3 2.2 3 2.5 3 1.1 3 2.5-1.3 2.5-3 2.5-3-1.1-3-2.5" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/></svg>
+              </div>
+
+              <div style="display:inline-block;background-color:#FDE8E8;color:#AF0303;padding:6px 16px;border-radius:20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:16px;">New Fee Assignment</div>
+
+              <h1 style="margin:0 0 16px 0;font-size:28px;font-weight:800;color:#333333;line-height:1.3;">{{ fee_name }} Fee Assigned</h1>
+
+              <div style="margin:0 auto 24px auto;font-size:40px;font-weight:800;color:#AF0303;">&#8358;{{ amount }}</div>
+
+              <div style="max-width:480px;margin:0 auto 24px auto;text-align:left;background-color:#FFF5F5;border-left:4px solid #AF0303;padding:16px;border-radius:8px;font-size:15px;line-height:1.6;color:#7A0000;">
+                <strong style="display:block;margin-bottom:6px;">&#9200; Due Date Approaching</strong>
+                Please complete payment before <strong>{{ due_date|date:'M d, Y' }}</strong> to avoid late fees.
+              </div>
+
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:480px;margin:0 auto;background-color:#FAFAFA;border:1px solid #E5E5E5;border-radius:8px;padding:20px 24px;">
+                <tr>
+                  <td style="padding:8px 0;font-size:14px;color:#888888;">Fee Amount</td>
+                  <td style="padding:8px 0;font-size:14px;color:#333333;font-weight:600;text-align:right;">&#8358;{{ amount }}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;font-size:14px;color:#888888;">Due Date</td>
+                  <td style="padding:8px 0;font-size:14px;color:#333333;font-weight:600;text-align:right;">{{ due_date|date:'MMM d, Y' }}</td>
+                </tr>
+              </table>
+
+              <div style="margin:28px 0 0 0;">
+                <a href="{{ frontend_url }}/dashboard/school-admin/collect-fees" style="display:inline-block;background-color:#AF0303;color:#FFFFFF;padding:14px 36px;text-decoration:none;border-radius:8px;font-weight:700;font-size:16px;">Pay Now via Paystack</a>
+              </div>
+
+              <p style="margin:28px 0 0 0;font-size:13px;color:#888888;">This fee has been assigned to all students. Contact admin if you have questions.</p>
             </td>
           </tr>
           <tr>
-            <td class="content">
-              <h2 style="font-size: 24px; color: #1e293b; margin-bottom: 16px;">{{ fee_name }} Fee Assigned</h2>
-              
-              <div class="fee-amount">₦{{ amount }}</div>
-              
-              <div class="urgency">
-                <h3 style="margin: 0 0 8px 0; color: #dc2626;">⏰ Due Date Approaching</h3>
-                <p style="margin: 0; font-size: 16px;">Please complete payment before <strong>{{ due_date|date:'M d, Y' }}</strong> to avoid late fees.</p>
-              </div>
-              
-              <div class="detail-grid">
-                <div class="detail-card">
-                  <div class="label">Fee Amount</div>
-                  <div class="value">₦{{ amount }}</div>
-                </div>
-                <div class="detail-card">
-                  <div class="label">Due Date</div>
-                  <div class="value">{{ due_date|date:'MMM d, Y' }}</div>
-                </div>
-              </div>
-              
-              <div style="text-align: center;">
-                <a href="{{ frontend_url }}/dashboard/school-admin/collect-fees" class="pay-button">Pay Now via Paystack</a>
-              </div>
-              
-              <p style="font-size: 14px; color: #64748b; text-align: center; margin-top: 30px;">
-                This fee has been assigned to all students. Contact admin if you have questions.
+            <td style="padding:20px 32px;background-color:#FAFAFA;border-top:1px solid #E5E5E5;">
+              <p style="margin:0 0 8px 0;text-align:center;font-size:14px;color:#666666;">
+                <a href="[unsubscribe]" style="color:#666666;text-decoration:underline;">Unsubscribe</a>
               </p>
-            </td>
-          </tr>
-          <tr>
-            <td class="footer">
-              <p>&copy; {{ 'now'|date:'Y' }} {{ school_name }}. Secure payments powered by Paystack.</p>
-              <p><a href="{{ frontend_url|default:'https://yourapp.com' }}">Fees Portal</a> | 
-              <a href="[unsubscribe]" style="text-decoration: underline;">Unsubscribe</a></p>
+              <p style="margin:0;text-align:center;font-size:12px;color:#999999;">&copy; {{ 'now'|date:'Y' }} {{ school_name }}. Secure payments powered by Paystack.</p>
             </td>
           </tr>
         </table>
@@ -80,4 +77,3 @@
   </table>
 </body>
 </html>
-
