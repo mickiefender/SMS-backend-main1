@@ -4,53 +4,66 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ subject }} - {{ school_name }}</title>
-  <style>
-    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; }
-    .container { max-width: 600px; margin: 0 auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
-    .header { background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%); padding: 30px; text-align: center; color: white; }
-    .logo { height: 60px; max-width: 200px; margin-bottom: 10px; }
-    .school-name { font-size: 24px; font-weight: 700; margin: 0; }
-    .content { padding: 40px; }
-    .message-badge { display: inline-block; padding: 6px 16px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 20px; background: #dbeafe; color: #1e40af; }
-    .title { font-size: 28px; font-weight: 700; color: #1e293b; margin-bottom: 16px; line-height: 1.3; }
-    .sender-info { background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 24px; }
-    .sender-label { color: #64748b; font-weight: 500; }
-    .sender-name { font-weight: 600; color: #1e293b; font-size: 16px; }
-    .message { font-size: 16px; line-height: 1.7; color: #475569; margin-bottom: 30px; }
-    .cta-button { display: inline-block; background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%); color: white; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; margin: 20px 0; }
-    .footer { background: #f1f5f9; padding: 30px; text-align: center; font-size: 14px; color: #64748b; }
-    @media (max-width: 600px) { .content { padding: 24px; } .title { font-size: 24px; } }
-  </style>
 </head>
-<body>
-  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<body style="margin:0;padding:0;background-color:#EDEDED;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
     <tr>
-      <td style="padding: 40px 20px;">
-        <table role="presentation" class="container" cellspacing="0" cellpadding="0" border="0">
+      <td style="padding:32px 16px;">
+        <!-- Header -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;margin:0 auto 24px auto;">
           <tr>
-            <td class="header">
+            <td align="left" style="vertical-align:middle;">
               {% if logo_url %}
-                <img src="{{ logo_url }}" alt="{{ school_name }} Logo" class="logo" style="display: block;">
+                <img src="{{ logo_url }}" alt="{{ school_name }} Logo" style="height:40px;display:block;">
+              {% else %}
+                <span style="font-size:22px;font-weight:800;color:#AF0303;letter-spacing:-0.5px;">{{ school_name }}</span>
               {% endif %}
-              <h1 class="school-name">{{ school_name }}</h1>
+            </td>
+            <td align="right" style="vertical-align:middle;">
+              <a href="{{ frontend_url|default:'https://yourapp.com' }}/login" style="display:inline-block;padding:10px 24px;border:2px solid #AF0303;border-radius:8px;color:#AF0303;text-decoration:none;font-weight:700;font-size:14px;background-color:#FFFFFF;">Log In</a>
             </td>
           </tr>
+        </table>
+
+        <!-- Card -->
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:600px;margin:0 auto;background-color:#FFFFFF;border-radius:16px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.08);">
           <tr>
-            <td class="content">
-              <span class="message-badge">New Message</span>
-              <h1 class="title">{{ subject }}</h1>
-              <div class="sender-info">
-                <div><span class="sender-label">From:</span> <span class="sender-name">{{ sender_name }}</span></div>
-                <div><span class="sender-label">Sent:</span> <span>{{ sent_at|date:'F d, Y \\a\\t g:i A' }}</span></div>
+            <td style="padding:40px 32px;text-align:center;">
+              <!-- Hero -->
+              <div style="width:96px;height:96px;margin:0 auto 24px auto;border-radius:50%;background:linear-gradient(135deg,#AF0303 0%,#7A0000 100%);display:flex;align-items:center;justify-content:center;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="none"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" fill="#FFFFFF"/><path d="M22 6l-10 7L2 6" stroke="#AF0303" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </div>
-              <div class="message">{{ content|safe }}</div>
-              <a href="{{ frontend_url|default:'https://yourapp.com/dashboard/messages' }}" class="cta-button">View Messages</a>
+
+              <div style="display:inline-block;background-color:#FDE8E8;color:#AF0303;padding:6px 16px;border-radius:20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:16px;">New Message</div>
+
+              <h1 style="margin:0 0 16px 0;font-size:28px;font-weight:800;color:#333333;line-height:1.3;">{{ subject }}</h1>
+
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:480px;margin:0 auto 24px auto;background-color:#FAFAFA;border:1px solid #E5E5E5;border-radius:8px;padding:20px 24px;">
+                <tr>
+                  <td style="padding:8px 0;font-size:14px;color:#888888;">From</td>
+                  <td style="padding:8px 0;font-size:14px;color:#333333;font-weight:600;text-align:right;">{{ sender_name }}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;font-size:14px;color:#888888;">Sent</td>
+                  <td style="padding:8px 0;font-size:14px;color:#333333;font-weight:600;text-align:right;">{{ sent_at|date:'F d, Y \\a\\t g:i A' }}</td>
+                </tr>
+              </table>
+
+              <div style="max-width:480px;margin:0 auto 24px auto;font-size:16px;line-height:1.7;color:#555555;text-align:left;">
+                {{ content|safe }}
+              </div>
+
+              <div style="margin:28px 0 0 0;">
+                <a href="{{ frontend_url|default:'https://yourapp.com/dashboard/messages' }}" style="display:inline-block;background-color:#AF0303;color:#FFFFFF;padding:14px 36px;text-decoration:none;border-radius:8px;font-weight:700;font-size:16px;">View Messages</a>
+              </div>
             </td>
           </tr>
           <tr>
-            <td class="footer">
-              <p>&copy; {{ 'now'|date:'Y' }} {{ school_name }}. All rights reserved.</p>
-              <p><a href="{{ frontend_url|default:'https://yourapp.com' }}" style="color: #475569;">{{ frontend_url|default:'yourapp.com' }}</a></p>
+            <td style="padding:20px 32px;background-color:#FAFAFA;border-top:1px solid #E5E5E5;">
+              <p style="margin:0 0 8px 0;text-align:center;font-size:14px;color:#666666;">
+                <a href="[unsubscribe]" style="color:#666666;text-decoration:underline;">Unsubscribe</a>
+              </p>
+              <p style="margin:0;text-align:center;font-size:12px;color:#999999;">&copy; {{ 'now'|date:'Y' }} {{ school_name }}. All rights reserved.</p>
             </td>
           </tr>
         </table>
