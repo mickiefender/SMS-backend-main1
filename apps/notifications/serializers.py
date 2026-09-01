@@ -50,6 +50,13 @@ class NotificationMarkReadSerializer(serializers.Serializer):
 
 class DeviceSerializer(serializers.ModelSerializer):
     user = serializers.PrimaryKeyRelatedField(read_only=True)
+    # The unique constraint on fcm_token is enforced in create() as an
+    # idempotent upsert (update_or_create). DRF would otherwise auto-add a
+    # UniqueValidator for this field because the model field is unique=True,
+    # which returns a 400 "Device with this fcm token already exists." before
+    # the upsert has a chance to run. Declaring the field with no validators
+    # disables that pre-emptive check so re-registration is handled cleanly.
+    fcm_token = serializers.CharField(max_length=500, validators=[])
 
     class Meta:
         model = Device
@@ -67,6 +74,11 @@ class DeviceSerializer(serializers.ModelSerializer):
         platform = validated_data.get('platform', 'android')
         device_name = validated_data.get('device_name', '')
 
+        # Idempotent registration: if the token already exists (a token refresh
+        # returned the same value, the user re-registered, or they logged back
+        # in on the same device), update the existing device with the current
+        # user, platform, device name, and last-seen info instead of failing.
+        # auto_now on last_seen_at / updated_at keeps those timestamps fresh.
         device, created = Device.objects.update_or_create(
             fcm_token=fcm_token,
             defaults={
@@ -74,7 +86,7 @@ class DeviceSerializer(serializers.ModelSerializer):
                 'platform': platform,
                 'device_name': device_name,
                 'is_active': True,
-            }
+            },
         )
         return device
 
