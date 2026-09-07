@@ -9,7 +9,17 @@ from django.db import connection, OperationalError, IntegrityError, transaction
 from django.db.models import Count, Q
 from core.permissions import IsSchoolAdminOrHigher, IsSuperAdmin, CanManageAdminStaff
 from apps.users.models import User, TeacherProfile, StudentProfile, RolePermission, ParentStudentRelationship
-from apps.academics.models import StudentClass
+from apps.academics.models import (
+    StudentClass, Class, ClassSubject, Timetable, AcademicSession, TerminalReport, SubjectScore,
+)
+from apps.attendance.models import Attendance
+from apps.assignments.models import Assignment, AssignmentSubmission
+from apps.billing.models import StudentFeeAssignment, ManualPayment, OnlinePayment
+from apps.students.models import Grade
+from apps.students.serializers import GradeSerializer
+from apps.academics.serializers import (
+    TimetableSerializer, TerminalReportListSerializer, ClassSerializer,
+)
 from apps.users.serializers import (
     UserSerializer, RegisterSerializer, LoginSerializer, AdminStaffCreateSerializer,
     TeacherProfileSerializer, StudentProfileSerializer, ParentSerializer, ParentStudentRelationshipSerializer
@@ -678,8 +688,312 @@ class ParentViewSet(viewsets.ModelViewSet):
         relationship.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    # ------------------------------------------------------------------
+    # PARENT-FACING CHILD DATA (read-only, scoped by approved relationships)
+    # ------------------------------------------------------------------
+    def _authorized_child(self, request, student_id):
+        """Return the student User if the parent has an approved relationship
+        with them; otherwise return None. The backend is the source of truth
+        for access — a child appearing in the UI never implies permanent
+        access."""
+        if request.user.role != 'parent':
+            return None
+        if not student_id:
+            return None
+        relationship = ParentStudentRelationship.objects.filter(
+            parent=request.user,
+            student_id=student_id,
+            status='approved',
+        ).select_related('student__student_profile', 'student__school').first()
+        if not relationship:
+            return None
+        return relationship.student
+
+    @staticmethod
+    def _child_payload(student):
+        """Build the child summary object (no sensitive data)."""
+        profile = getattr(student, 'student_profile', None)
+        level_name = profile.level.name if (profile and profile.level) else None
+        class_obj = StudentClass.objects.filter(
+            student=student, is_active=True,
+        ).select_related('class_obj').first()
+        class_name = class_obj.class_obj.name if (class_obj and class_obj.class_obj) else None
+        school_name = student.school.name if student.school else None
+        profile_picture = None
+        try:
+            pic = getattr(student, 'profile_picture', None)
+            if pic:
+                profile_picture = pic.display_url
+        except Exception:
+            pass
+        return {
+            'id': student.id,
+            'first_name': student.first_name,
+            'last_name': student.last_name,
+            'full_name': student.get_full_name() or student.username,
+            'email': student.email,
+            'student_id': profile.student_id if profile else None,
+            'level_name': level_name,
+            'class_name': class_name,
+            'school_name': school_name,
+            'profile_picture': profile_picture,
+        }
+
+    @action(detail=False, methods=['get'])
+    def children(self, request):
+        """List the parent's approved linked children."""
+        if request.user.role != 'parent':
+            return Response({'detail': 'Only parent accounts can view children.'}, status=status.HTTP_403_FORBIDDEN)
+        relationships = ParentStudentRelationship.objects.filter(
+            parent=request.user, status='approved',
+        ).select_related('student__student_profile', 'student__school').order_by('student__first_name')
+        payload = []
+        for rel in relationships:
+            child = self._child_payload(rel.student)
+            child['relationship_type'] = rel.relationship_type
+            child['relationship_status'] = rel.status
+            payload.append(child)
+        return Response(payload)
+
+    @action(detail=False, methods=['get'], url_path='children/(?P<student_id>[^/.]+)/dashboard')
+    def child_dashboard(self, request, student_id=None):
+        """Summary dashboard for one linked child."""
+        child = self._authorized_child(request, student_id)
+        if not child:
+            return Response({'detail': 'You do not have access to this child.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Attendance
+        attendances = Attendance.objects.filter(student=child)
+        total_days = attendances.count()
+        present_days = attendances.filter(status='present').count()
+        presence_pct = round((present_days / total_days * 100), 2) if total_days > 0 else 0.0
+
+        # Assignments
+        class_ids = list(StudentClass.objects.filter(
+            student=child, is_active=True,
+        ).values_list('class_obj_id', flat=True).distinct())
+        assignments = Assignment.objects.filter(class_obj_id__in=class_ids)
+        total_assignments = assignments.count()
+        pending_assignments = 0
+        for assignment in assignments:
+            submission = AssignmentSubmission.objects.filter(
+                assignment=assignment, student=child,
+            ).first()
+            if not submission or submission.status == 'not_submitted':
+                pending_assignments += 1
+
+        # Performance
+        grades = Grade.objects.filter(student=child)
+        if grades.exists():
+            scores = [float(g.score) for g in grades if g.score is not None]
+            overall = round(sum(scores) / len(scores), 2) if scores else 0.0
+        else:
+            overall = 0.0
+
+        # Fees
+        fee_assignments = StudentFeeAssignment.objects.filter(student=child)
+        total_fees = sum(float(fa.amount) for fa in fee_assignments)
+        total_paid = sum(float(fa.amount_paid) for fa in fee_assignments)
+        balance = max(0.0, total_fees - total_paid)
+
+        return Response({
+            'child': self._child_payload(child),
+            'attendance': {
+                'total_days': total_days,
+                'present_days': present_days,
+                'absent_days': attendances.filter(status='absent').count(),
+                'late_days': attendances.filter(status='late').count(),
+                'presence_percentage': presence_pct,
+            },
+            'assignments': {
+                'total': total_assignments,
+                'pending': pending_assignments,
+            },
+            'performance': {'overall': overall},
+            'fees': {
+                'total': round(total_fees, 2),
+                'paid': round(total_paid, 2),
+                'balance': round(balance, 2),
+            },
+        })
+
+    @action(detail=False, methods=['get'], url_path='children/(?P<student_id>[^/.]+)/attendance')
+    def child_attendance(self, request, student_id=None):
+        child = self._authorized_child(request, student_id)
+        if not child:
+            return Response({'detail': 'You do not have access to this child.'}, status=status.HTTP_403_FORBIDDEN)
+        attendances = Attendance.objects.filter(student=child).order_by('-date')
+        total = attendances.count()
+        present = attendances.filter(status='present').count()
+        absent = attendances.filter(status='absent').count()
+        late = attendances.filter(status='late').count()
+        excused = attendances.filter(status='excused').count()
+        pct = round((present / total * 100), 2) if total > 0 else 0.0
+        records = [{
+            'date': a.date.isoformat() if a.date else None,
+            'status': a.status,
+            'subject_name': a.subject.name if a.subject else None,
+            'class_name': a.class_obj.name if a.class_obj else None,
+        } for a in attendances]
+        return Response({
+            'child': self._child_payload(child),
+            'total_days': total,
+            'present_days': present,
+            'absent_days': absent,
+            'late_days': late,
+            'excused_days': excused,
+            'presence_percentage': pct,
+            'records': records,
+        })
+
+    @action(detail=False, methods=['get'], url_path='children/(?P<student_id>[^/.]+)/assignments')
+    def child_assignments(self, request, student_id=None):
+        child = self._authorized_child(request, student_id)
+        if not child:
+            return Response({'detail': 'You do not have access to this child.'}, status=status.HTTP_403_FORBIDDEN)
+        class_ids = list(StudentClass.objects.filter(
+            student=child, is_active=True,
+        ).values_list('class_obj_id', flat=True).distinct())
+        assignments = Assignment.objects.filter(class_obj_id__in=class_ids).order_by('due_date')
+        result = []
+        for assignment in assignments:
+            submission = AssignmentSubmission.objects.filter(
+                assignment=assignment, student=child,
+            ).first()
+            result.append({
+                'assignment': {
+                    'id': assignment.id,
+                    'title': assignment.title,
+                    'description': assignment.description,
+                    'due_date': assignment.due_date.isoformat() if assignment.due_date else None,
+                },
+                'subject': assignment.subject.name if assignment.subject else None,
+                'submission': {
+                    'status': submission.status if submission else 'not_submitted',
+                    'score': submission.score if submission else None,
+                    'feedback': submission.feedback if submission else None,
+                } if submission else None,
+            })
+        return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='children/(?P<student_id>[^/.]+)/grades')
+    def child_grades(self, request, student_id=None):
+        child = self._authorized_child(request, student_id)
+        if not child:
+            return Response({'detail': 'You do not have access to this child.'}, status=status.HTTP_403_FORBIDDEN)
+        grades = Grade.objects.filter(student=child).select_related('subject', 'academic_session')
+        rows = [{
+            'id': g.id,
+            'subject_name': g.subject.name if g.subject else None,
+            'assessment_type': g.assessment_type,
+            'score': g.score,
+            'max_score': g.max_score,
+            'percentage': g.percentage,
+            'grade': g.grade,
+            'academic_session': g.academic_session_id,
+        } for g in grades]
+        scores = [float(g.score) for g in grades if g.score is not None]
+        overall = round(sum(scores) / len(scores), 2) if scores else 0.0
+        return Response({'results': rows, 'overall': overall})
+
+    @action(detail=False, methods=['get'], url_path='children/(?P<student_id>[^/.]+)/fees')
+    def child_fees(self, request, student_id=None):
+        child = self._authorized_child(request, student_id)
+        if not child:
+            return Response({'detail': 'You do not have access to this child.'}, status=status.HTTP_403_FORBIDDEN)
+        fee_assignments = StudentFeeAssignment.objects.filter(student=child).select_related('fee').order_by('-due_date')
+        results = []
+        total = 0.0
+        paid = 0.0
+        for fa in fee_assignments:
+            manual = ManualPayment.objects.filter(fee_assignment=fa).order_by('-payment_date')
+            online = OnlinePayment.objects.filter(fee_assignment=fa, status='success').order_by('-created_at')
+            payment_history = []
+            for mp in manual:
+                payment_history.append({
+                    'id': mp.id,
+                    'amount': str(mp.amount),
+                    'payment_date': mp.payment_date.isoformat() if mp.payment_date else None,
+                    'method': mp.payment_method,
+                    'reference': mp.receipt_number,
+                    'note': mp.notes,
+                })
+            for op in online:
+                payment_history.append({
+                    'id': op.id,
+                    'amount': str(op.amount),
+                    'payment_date': (op.paid_at or op.created_at).isoformat() if (op.paid_at or op.created_at) else None,
+                    'method': op.payment_method,
+                    'reference': op.reference,
+                    'note': op.notes,
+                })
+            payment_history.sort(key=lambda x: x['payment_date'] or '', reverse=True)
+            fa_total = float(fa.amount)
+            fa_paid = float(fa.amount_paid)
+            total += fa_total
+            paid += fa_paid
+            results.append({
+                'id': fa.id,
+                'student_id': fa.student_id,
+                'title': fa.fee.name,
+                'fee_type': fa.fee.fee_type,
+                'amount': str(fa_total),
+                'total_amount': str(fa_total),
+                'amount_assigned': str(fa_total),
+                'assigned_amount': str(fa_total),
+                'paid_amount': str(fa_paid),
+                'amount_paid': str(fa_paid),
+                'total_paid': str(sum(float(p['amount']) for p in payment_history)),
+                'due_date': fa.due_date.isoformat() if fa.due_date else None,
+                'status': fa.status,
+                'payment_status': fa.status,
+                'paid': fa.paid,
+                'payment_history': payment_history,
+                'payments': payment_history,
+                'transactions': payment_history,
+                'payment_records': payment_history,
+                'balance': str(fa.balance),
+                'fee_name': fa.fee.name,
+                'description': fa.fee.description,
+            })
+        return Response({
+            'child': self._child_payload(child),
+            'fees': results,
+            'total': round(total, 2),
+            'paid': round(paid, 2),
+            'balance': round(max(0.0, total - paid), 2),
+        })
+
+    @action(detail=False, methods=['get'], url_path='children/(?P<student_id>[^/.]+)/timetable')
+    def child_timetable(self, request, student_id=None):
+        child = self._authorized_child(request, student_id)
+        if not child:
+            return Response({'detail': 'You do not have access to this child.'}, status=status.HTTP_403_FORBIDDEN)
+        class_obj = StudentClass.objects.filter(
+            student=child, is_active=True,
+        ).select_related('class_obj').first()
+        if not class_obj:
+            return Response({'results': []})
+        timetables = Timetable.objects.filter(class_obj=class_obj.class_obj).select_related('subject', 'teacher')
+        serializer = TimetableSerializer(timetables, many=True)
+        return Response({'results': serializer.data})
+
+    @action(detail=False, methods=['get'], url_path='children/(?P<student_id>[^/.]+)/report-cards')
+    def child_report_cards(self, request, student_id=None):
+        child = self._authorized_child(request, student_id)
+        if not child:
+            return Response({'detail': 'You do not have access to this child.'}, status=status.HTTP_403_FORBIDDEN)
+        reports = TerminalReport.objects.filter(
+            student=child,
+        ).select_related('class_obj', 'academic_session').order_by('-academic_session')
+        serializer = TerminalReportListSerializer(reports, many=True)
+        return Response(serializer.data)
+
     @action(detail=False, methods=['get'])
     def my_classes(self, request):
+
+
+
         """
         Get classes assigned to the teacher.
         This endpoint returns classes where the teacher is either a ClassTeacher (form tutor)
