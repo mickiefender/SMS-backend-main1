@@ -229,3 +229,47 @@ class RolePermission(models.Model):
         if permission_code in self.permission:
             self.permission.remove(permission_code)
             self.save()
+
+
+class ParentStudentRelationship(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('revoked', 'Revoked'),
+    )
+    RELATIONSHIP_CHOICES = (
+        ('mother', 'Mother'),
+        ('father', 'Father'),
+        ('guardian', 'Guardian'),
+        ('other', 'Other'),
+    )
+
+    parent = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='parent_student_relationships',
+        limit_choices_to={'role': 'parent'},
+    )
+    student = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='student_parent_relationships',
+        limit_choices_to={'role': 'student'},
+    )
+    relationship_type = models.CharField(max_length=20, choices=RELATIONSHIP_CHOICES, default='guardian')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='approved')
+    created_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='created_parent_relationships',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['parent', 'student'], name='unique_parent_student_relationship'),
+        ]
+        indexes = [
+            models.Index(fields=['parent', 'status']),
+            models.Index(fields=['student', 'status']),
+        ]
+
+    def __str__(self):
+        return f'{self.parent} -> {self.student} ({self.status})'

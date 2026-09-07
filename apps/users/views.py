@@ -6,13 +6,13 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.views import APIView
 from django.contrib.auth import authenticate
 from django.db import connection, OperationalError, IntegrityError, transaction
-from django.db.models import Count
+from django.db.models import Count, Q
 from core.permissions import IsSchoolAdminOrHigher, IsSuperAdmin, CanManageAdminStaff
-from apps.users.models import User, TeacherProfile, StudentProfile, RolePermission
+from apps.users.models import User, TeacherProfile, StudentProfile, RolePermission, ParentStudentRelationship
 from apps.academics.models import StudentClass
 from apps.users.serializers import (
     UserSerializer, RegisterSerializer, LoginSerializer, AdminStaffCreateSerializer,
-    TeacherProfileSerializer, StudentProfileSerializer
+    TeacherProfileSerializer, StudentProfileSerializer, ParentSerializer, ParentStudentRelationshipSerializer
 )
 import time
 
@@ -381,6 +381,303 @@ class StudentViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    def update(self, request, *args, **kwargs):
+        """
+        Update both the linked User record (name, email, phone, username)
+        and the StudentProfile record (level, department, date_of_birth, address, etc.).
+        The frontend never sends the 'user' PK, so we update ORM objects directly.
+        """
+        ensure_connection()
+        instance = self.get_object()
+
+        try:
+            # ── 1. Update User fields ──────────────────────────────────────
+            user = instance.user
+            user_dirty = False
+            for field in ('first_name', 'last_name', 'email', 'username', 'phone'):
+                value = request.data.get(field)
+                if value not in (None, ''):
+                    setattr(user, field, value)
+                    user_dirty = True
+            if request.data.get('password'):
+                user.set_password(request.data['password'])
+                user_dirty = True
+            if user_dirty:
+                user.save()
+
+            # ── 2. Update StudentProfile fields ───────────────────────────
+            if 'level' in request.data:
+                instance.level_id = request.data['level'] or None
+            if 'department' in request.data:
+                instance.department_id = request.data['department'] or None
+            if 'date_of_birth' in request.data and request.data['date_of_birth']:
+                instance.date_of_birth = request.data['date_of_birth']
+            elif 'date_of_birth' in request.data and not request.data['date_of_birth']:
+                instance.date_of_birth = None
+
+            # ── 3. Extended personal fields ────────────────────────────────
+            if 'gender' in request.data:
+                instance.gender = request.data['gender'] or None
+            if 'father_name' in request.data:
+                instance.father_name = request.data['father_name'] or ''
+            if 'mother_name' in request.data:
+                instance.mother_name = request.data['mother_name'] or ''
+            if 'religion' in request.data:
+                instance.religion = request.data['religion'] or ''
+            if 'father_occupation' in request.data:
+                instance.father_occupation = request.data['father_occupation'] or ''
+            if 'address' in request.data:
+                instance.address = request.data['address'] or ''
+            if 'roll_number' in request.data:
+                instance.roll_number = request.data['roll_number'] or ''
+
+            instance.save()
+
+            serializer = self.get_serializer(instance)
+            return Response(serializer.data)
+
+        except OperationalError:
+            connection.close()
+            return Response(
+                {'error': 'Database connection error. Please try again.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    def create(self, request, *args, **kwargs):
+        ensure_connection()
+        try:
+            print(f"[users] Student profile create - received data: {request.data}")
+
+            # Get the user ID from the request (should be passed from frontend after user creation)
+            user_id = request.data.get('user')
+            if not user_id:
+                return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+            student_data = {
+                'user': user_id,
+                'level': request.data.get('level'),
+                'department': request.data.get('department'),
+                # student_id is auto-generated in the model's save() method
+            }
+
+            serializer = self.get_serializer(data=student_data)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
+            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+        except IntegrityError as e:
+            # This might still happen if there's a unique constraint violation on another field
+            print(f"[v0] StudentProfile create integrity error: {str(e)}")
+            return Response({'error': f'A database integrity error occurred: {e}'}, status=status.HTTP_400_BAD_REQUEST)
+        except OperationalError:
+            connection.close()
+            return Response({
+                'error': 'Database connection error. Please try again.'
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except Exception as e:
+            print(f"[v0] StudentProfile create error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ParentViewSet(viewsets.ModelViewSet):
+    serializer_class = ParentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = User.objects.filter(role='parent').select_related('school').prefetch_related(
+            'parent_student_relationships__student__student_profile',
+            'parent_student_relationships__student__school',
+        )
+        if self.request.user.role == 'parent':
+            return queryset.filter(pk=self.request.user.pk)
+        if self.request.user.role == 'super_admin':
+            school_id = self.request.query_params.get('school_id')
+            return queryset.filter(school_id=school_id) if school_id else queryset
+        return queryset.filter(school_id=self.request.user.school_id)
+
+    def create(self, request, *args, **kwargs):
+        print(f"[users] Parent account create - received student_ids: {request.data.get('student_ids', [])}")
+        if request.user.role not in ('school_admin', 'super_admin'):
+            return Response({'detail': 'Only a school administrator can create parent accounts.'}, status=status.HTTP_403_FORBIDDEN)
+        if request.user.role == 'school_admin' and not request.user.school_id:
+            return Response({'detail': 'The administrator is not assigned to a school.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        data = request.data
+        student_ids = data.get('student_ids', [])
+        if not isinstance(student_ids, list):
+            return Response({'student_ids': 'Provide a list of student user IDs.'}, status=status.HTTP_400_BAD_REQUEST)
+        school_id = request.user.school_id if request.user.role == 'school_admin' else data.get('school')
+        if not school_id:
+            return Response({'school': 'A school is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        requested_student_ids = {str(student_id).strip() for student_id in student_ids if str(student_id).strip()}
+        numeric_student_ids = {int(student_id) for student_id in requested_student_ids if student_id.isdigit()}
+        if not requested_student_ids:
+            return Response({'student_ids': 'Select at least one student.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        students = list(User.objects.filter(
+            id__in=numeric_student_ids,
+            role='student',
+            school_id=school_id,
+        ))
+        profiles = StudentProfile.objects.filter(
+            Q(id__in=numeric_student_ids) | Q(student_id__in=requested_student_ids),
+            user__role='student',
+            user__school_id=school_id,
+        ).select_related('user')
+        students.extend(profile.user for profile in profiles)
+        students = list({student.id: student for student in students}.values())
+        matched_ids = {str(student.id) for student in students}
+        matched_ids.update(
+            identifier
+            for profile in profiles
+            for identifier in (str(profile.id), profile.student_id)
+            if identifier
+        )
+
+        if not students or not requested_student_ids.issubset(matched_ids):
+            return Response({
+                'detail': 'The selected student was not found in the administrator’s school.',
+                'received_ids': sorted(requested_student_ids),
+                'matched_ids': sorted(matched_ids),
+            }, status=status.HTTP_400_BAD_REQUEST)
+        required = ('email', 'first_name', 'last_name', 'password')
+        missing = {field: 'This field is required.' for field in required if not data.get(field)}
+        if missing:
+            return Response(missing, status=status.HTTP_400_BAD_REQUEST)
+
+        base_username = f"{data['first_name'][0]}{data['last_name']}".lower().replace(' ', '')[:25] or 'parent'
+        username = base_username
+        suffix = 1
+        while User.objects.filter(username=username).exists():
+            username = f'{base_username}{suffix}'
+            suffix += 1
+
+        try:
+            with transaction.atomic():
+                parent = User.objects.create_user(
+                    username=username,
+                    email=data['email'].strip().lower(),
+                    first_name=data['first_name'].strip(),
+                    last_name=data['last_name'].strip(),
+                    password=data['password'],
+                    phone=data.get('phone', ''),
+                    role='parent',
+                    school_id=school_id,
+                )
+                ParentStudentRelationship.objects.bulk_create([
+                    ParentStudentRelationship(
+                        parent=parent,
+                        student=student,
+                        relationship_type=data.get('relationship_type', 'guardian'),
+                        status='approved',
+                        created_by=request.user,
+                    )
+                    for student in students
+                ])
+        except IntegrityError as error:
+            return Response({
+                'detail': 'The parent account could not be created because it conflicts with existing data.',
+                'error': str(error),
+            }, status=status.HTTP_400_BAD_REQUEST)
+        return Response(ParentSerializer(parent).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['post'], url_path='link')
+    def link_existing(self, request):
+        if request.user.role not in ('school_admin', 'super_admin'):
+            return Response({'detail': 'Only a school administrator can link students.'}, status=status.HTTP_403_FORBIDDEN)
+
+        parent_id = request.data.get('parent_id')
+        student_ids = request.data.get('student_ids', [])
+        if not parent_id or not isinstance(student_ids, list) or not student_ids:
+            return Response({'detail': 'parent_id and at least one student_id are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        parent = self.get_queryset().filter(id=parent_id).first()
+        if not parent or (request.user.role == 'school_admin' and parent.school_id != request.user.school_id):
+            return Response({'detail': 'Parent account not found in your school.'}, status=status.HTTP_404_NOT_FOUND)
+        school_id = parent.school_id
+
+        try:
+            numeric_ids = {int(value) for value in student_ids}
+        except (TypeError, ValueError):
+            return Response({'detail': 'Student IDs must be numeric user IDs.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        students = list(User.objects.filter(
+            id__in=numeric_ids, role='student', school_id=school_id,
+        ))
+        if len(students) != len(numeric_ids):
+            return Response({'detail': 'One or more students were not found in your school.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        relationship_type = request.data.get('relationship_type', 'guardian')
+        if relationship_type not in dict(ParentStudentRelationship.RELATIONSHIP_CHOICES):
+            return Response({'relationship_type': 'Use mother, father, guardian, or other.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        relationships = []
+        for student in students:
+            relationship, _ = ParentStudentRelationship.objects.update_or_create(
+                parent=parent,
+                student=student,
+                defaults={
+                    'relationship_type': relationship_type,
+                    'status': 'approved',
+                    'created_by': request.user,
+                },
+            )
+            relationships.append(relationship)
+        return Response(ParentStudentRelationshipSerializer(relationships, many=True).data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'])
+    def dashboard(self, request):
+        if request.user.role != 'parent':
+            return Response({'detail': 'Only parent accounts can access this dashboard.'}, status=status.HTTP_403_FORBIDDEN)
+        return Response(ParentSerializer(self.get_queryset().get(pk=request.user.pk)).data)
+
+    @action(detail=False, methods=['get'], url_path='relationships')
+    def relationships(self, request):
+        queryset = ParentStudentRelationship.objects.filter(
+            parent__school_id=request.user.school_id
+        ).select_related('parent', 'student__student_profile', 'student__school')
+        if request.user.role == 'parent':
+            queryset = queryset.filter(parent=request.user)
+        elif request.user.role not in ('school_admin', 'super_admin'):
+            return Response({'detail': 'You do not have permission to view relationships.'}, status=status.HTTP_403_FORBIDDEN)
+        return Response(ParentStudentRelationshipSerializer(queryset, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='relationships/(?P<relationship_id>[^/.]+)/status')
+    def relationship_status(self, request, pk=None, relationship_id=None):
+        if request.user.role not in ('school_admin', 'super_admin'):
+            return Response({'detail': 'Only a school administrator can change relationship status.'}, status=status.HTTP_403_FORBIDDEN)
+        relationship = ParentStudentRelationship.objects.filter(
+            id=relationship_id, parent_id=pk, parent__school_id=request.user.school_id,
+        ).first()
+        if not relationship:
+            return Response({'detail': 'Relationship not found.'}, status=status.HTTP_404_NOT_FOUND)
+        new_status = request.data.get('status')
+        if new_status not in dict(ParentStudentRelationship.STATUS_CHOICES):
+            return Response({'status': 'Use pending, approved, or revoked.'}, status=status.HTTP_400_BAD_REQUEST)
+        relationship.status = new_status
+        relationship.save(update_fields=['status', 'updated_at'])
+        return Response(ParentStudentRelationshipSerializer(relationship).data)
+
+    @action(detail=False, methods=['delete'], url_path='relationships/(?P<relationship_id>[^/.]+)/remove')
+    def remove_relationship(self, request, relationship_id=None):
+        if request.user.role not in ('school_admin', 'super_admin'):
+            return Response({'detail': 'Only a school administrator can remove relationships.'}, status=status.HTTP_403_FORBIDDEN)
+        relationship_query = ParentStudentRelationship.objects.filter(id=relationship_id)
+        if request.user.role == 'school_admin':
+            relationship_query = relationship_query.filter(parent__school_id=request.user.school_id)
+        relationship = relationship_query.first()
+        if not relationship:
+            return Response({'detail': 'Relationship not found.'}, status=status.HTTP_404_NOT_FOUND)
+        relationship.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     @action(detail=False, methods=['get'])
     def my_classes(self, request):
         """
@@ -575,110 +872,6 @@ class StudentViewSet(viewsets.ModelViewSet):
             print(f"[TeacherStudents] Error: {str(e)}")
             traceback.print_exc()
             return Response({'error': str(e)}, status=500)
-
-    def update(self, request, *args, **kwargs):
-        """
-        Update both the linked User record (name, email, phone, username)
-        and the StudentProfile record (level, department, date_of_birth, address, etc.).
-        The frontend never sends the 'user' PK, so we update ORM objects directly.
-        """
-        ensure_connection()
-        instance = self.get_object()
-
-        try:
-            # ── 1. Update User fields ──────────────────────────────────────
-            user = instance.user
-            user_dirty = False
-            for field in ('first_name', 'last_name', 'email', 'username', 'phone'):
-                value = request.data.get(field)
-                if value not in (None, ''):
-                    setattr(user, field, value)
-                    user_dirty = True
-            if request.data.get('password'):
-                user.set_password(request.data['password'])
-                user_dirty = True
-            if user_dirty:
-                user.save()
-
-            # ── 2. Update StudentProfile fields ───────────────────────────
-            if 'level' in request.data:
-                instance.level_id = request.data['level'] or None
-            if 'department' in request.data:
-                instance.department_id = request.data['department'] or None
-            if 'date_of_birth' in request.data and request.data['date_of_birth']:
-                instance.date_of_birth = request.data['date_of_birth']
-            elif 'date_of_birth' in request.data and not request.data['date_of_birth']:
-                instance.date_of_birth = None
-
-            # ── 3. Extended personal fields ────────────────────────────────
-            if 'gender' in request.data:
-                instance.gender = request.data['gender'] or None
-            if 'father_name' in request.data:
-                instance.father_name = request.data['father_name'] or ''
-            if 'mother_name' in request.data:
-                instance.mother_name = request.data['mother_name'] or ''
-            if 'religion' in request.data:
-                instance.religion = request.data['religion'] or ''
-            if 'father_occupation' in request.data:
-                instance.father_occupation = request.data['father_occupation'] or ''
-            if 'address' in request.data:
-                instance.address = request.data['address'] or ''
-            if 'roll_number' in request.data:
-                instance.roll_number = request.data['roll_number'] or ''
-
-            instance.save()
-
-            serializer = self.get_serializer(instance)
-            return Response(serializer.data)
-
-        except OperationalError:
-            connection.close()
-            return Response(
-                {'error': 'Database connection error. Please try again.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-    def create(self, request, *args, **kwargs):
-        ensure_connection()
-        try:
-            print(f"[v0] StudentProfile create - received data: {request.data}")
-
-            # Get the user ID from the request (should be passed from frontend after user creation)
-            user_id = request.data.get('user')
-            if not user_id:
-                return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-            student_data = {
-                'user': user_id,
-                'level': request.data.get('level'),
-                'department': request.data.get('department'),
-                # student_id is auto-generated in the model's save() method
-            }
-
-            serializer = self.get_serializer(data=student_data)
-            serializer.is_valid(raise_exception=True)
-            self.perform_create(serializer)
-            headers = self.get_success_headers(serializer.data)
-            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-
-        except IntegrityError as e:
-            # This might still happen if there's a unique constraint violation on another field
-            print(f"[v0] StudentProfile create integrity error: {str(e)}")
-            return Response({'error': f'A database integrity error occurred: {e}'}, status=status.HTTP_400_BAD_REQUEST)
-        except OperationalError:
-            connection.close()
-            return Response({
-                'error': 'Database connection error. Please try again.'
-            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        except Exception as e:
-            print(f"[v0] StudentProfile create error: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class AdminStaffViewSet(viewsets.ModelViewSet):

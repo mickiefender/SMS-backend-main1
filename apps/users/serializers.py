@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from apps.users.models import User, TeacherProfile, StudentProfile
+from apps.users.models import User, TeacherProfile, StudentProfile, ParentStudentRelationship
 import random
+import re
 
 
 def generate_unique_username(school, first_name, last_name):
@@ -56,7 +57,7 @@ class UserSerializer(serializers.ModelSerializer):
         return None
 
     def get_school_logo(self, obj):
-        """Get the school logo URL from the related school"""
+        """Get the school logo URL from the related school."""
         try:
             if obj.school:
                 return obj.school.get_logo_url()
@@ -65,7 +66,43 @@ class UserSerializer(serializers.ModelSerializer):
         return None
 
 
+class ParentStudentRelationshipSerializer(serializers.ModelSerializer):
+    parent_name = serializers.SerializerMethodField()
+    student_name = serializers.SerializerMethodField()
+    student_id = serializers.CharField(source='student.student_profile.student_id', read_only=True)
+    school_name = serializers.CharField(source='student.school.name', read_only=True)
+
+    class Meta:
+        model = ParentStudentRelationship
+        fields = [
+            'id', 'parent', 'parent_name', 'student', 'student_name', 'student_id',
+            'school_name', 'relationship_type', 'status', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'parent_name', 'student_name', 'student_id', 'school_name', 'created_at', 'updated_at']
+
+    def get_parent_name(self, obj):
+        return obj.parent.get_full_name() or obj.parent.username
+
+    def get_student_name(self, obj):
+        return obj.student.get_full_name() or obj.student.username
+
+
+class ParentSerializer(serializers.ModelSerializer):
+    children = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'username', 'first_name', 'last_name', 'phone', 'school', 'is_active_user', 'created_at', 'children']
+        read_only_fields = ['id', 'username', 'school', 'created_at', 'children']
+
+    def get_children(self, obj):
+        relationships = obj.parent_student_relationships.filter(status='approved').select_related('student__student_profile', 'student__school')
+        return ParentStudentRelationshipSerializer(relationships, many=True).data
+
 class RegisterSerializer(serializers.ModelSerializer):
+    # Student usernames are generated from the student's name, so validate the
+    # raw value only after role-specific normalization in validate().
+    username = serializers.CharField(required=False, allow_blank=True, validators=[])
     password = serializers.CharField(write_only=True, required=True)
     password2 = serializers.CharField(write_only=True, required=True)
     
@@ -84,6 +121,15 @@ class RegisterSerializer(serializers.ModelSerializer):
             last_name = attrs.get('last_name', '')
             
             attrs['username'] = generate_unique_username(school, first_name, last_name)
+        else:
+            username = attrs.get('username', '').strip()
+            if not username:
+                raise serializers.ValidationError({"username": "This field is required."})
+            if not re.fullmatch(r'^[\w.@+-]+$', username):
+                raise serializers.ValidationError({
+                    "username": "Use only letters, numbers, and @/./+/-/_ characters in the username."
+                })
+            attrs['username'] = username
         
         return attrs
     

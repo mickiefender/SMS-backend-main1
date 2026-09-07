@@ -1,11 +1,16 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+
 from rest_framework_simplejwt.views import TokenRefreshView
 from apps.users.views import AuthViewSet, UserViewSet, TeacherViewSet, StudentViewSet, CurrentUserView, AdminStaffViewSet
+
+from apps.users.views import AuthViewSet, UserViewSet, TeacherViewSet, StudentViewSet, ParentViewSet, CurrentUserView, AdminStaffViewSet
+
 
 router = DefaultRouter()
 router.register(r'teachers', TeacherViewSet, basename='teacher')
 router.register(r'students', StudentViewSet, basename='student')
+router.register(r'parents', ParentViewSet, basename='parent')
 router.register(r'admin-staff', AdminStaffViewSet, basename='admin-staff')
 router.register(r'users', UserViewSet, basename='user')  # Changed from r'' to r'users' to avoid path conflicts
 
