@@ -23,6 +23,9 @@ from apps.feed.permissions import (
 from apps.feed.services.feed_service import FeedService
 from apps.feed.services.lesson_service import LessonService
 from apps.feed.services.recommendation_service import RecommendationService
+from apps.feed.services.personalized_recommendation_service import (
+    PersonalizedRecommendationService,
+)
 from apps.feed.services.search_service import SearchService
 from apps.feed.services.analytics_service import AnalyticsService
 from apps.feed.services.notification_service import NotificationService
@@ -223,18 +226,21 @@ class FeedView(APIView):
     permission_classes = [AllowAny]
     pagination_class = FeedCursorPagination
 
+    # Strategies served by the snapshot-based ranker. These build a fresh,
+    # exploration-jittered ranking when no token is supplied (i.e. on
+    # pull-to-refresh) and pin that ordering with a token + cursor so paginated
+    # scrolling never jumps or duplicates.
+    SNAPSHOT_STRATEGIES = ('recommended', 'personalized', 'latest')
+
     def get(self, request):
         strategy = request.query_params.get('strategy', 'trending')
         school_id = request.query_params.get('school_id')
+
+        if strategy in self.SNAPSHOT_STRATEGIES:
+            return self._snapshot_feed(request, strategy, school_id)
+
         qs = FeedService.get_feed(request.user, strategy=strategy, school_id=school_id)
-        if strategy in ('recommended', 'personalized'):
-            paginator = self.pagination_class()
-            paginator.ordering = (
-                ('-rec_score', '-published_at', '-pk')
-                if request.user and request.user.is_authenticated
-                else ('-trending_score', '-published_at', '-pk')
-            )
-        elif strategy == 'trending':
+        if strategy == 'trending':
             paginator = TrendingCursorPagination()
         else:
             paginator = self.pagination_class()
@@ -243,6 +249,88 @@ class FeedView(APIView):
             page, many=True, context={'request': request}
         )
         return paginator.get_paginated_response(serializer.data)
+
+    def _snapshot_feed(self, request, strategy, school_id):
+        user = request.user if request.user.is_authenticated else None
+        guest_device_id = request.query_params.get('device_id', '')
+
+        # Guests with no stable device id fall back to the deterministic guest
+        # feed (DRF cursor pagination) since they cannot hold a snapshot token.
+        if not user and not guest_device_id:
+            qs = FeedService.get_feed(request.user, strategy=strategy, school_id=school_id)
+            paginator = self.pagination_class()
+            paginator.ordering = ('-published_at', '-pk')
+            page = paginator.paginate_queryset(qs, request, view=self)
+            serializer = serializers.LessonListSerializer(
+                page, many=True, context={'request': request}
+            )
+            return paginator.get_paginated_response(serializer.data)
+
+        feed_token = request.query_params.get('feed_token', '')
+        raw_cursor = request.query_params.get('cursor')
+        try:
+            cursor = max(0, int(raw_cursor)) if raw_cursor is not None else None
+        except (TypeError, ValueError):
+            cursor = None
+
+        all_ids = None
+        if cursor is not None:
+            # Continuation of an existing session — reuse the stored ordering so
+            # scrolling stays stable.
+            all_ids = PersonalizedRecommendationService.get_snapshot(
+                user=user, guest_device_id=guest_device_id, token=feed_token,
+            )
+            if all_ids is not None and cursor > len(all_ids):
+                cursor = len(all_ids)
+
+        if all_ids is None:
+            # First page or an expired/invalid token — build a fresh ranking.
+            # This also happens on pull-to-refresh (no token) which gives a new
+            # arrangement every time.
+            feed_token, all_ids = PersonalizedRecommendationService.create_snapshot(
+                user=user,
+                guest_device_id=guest_device_id,
+                school_id=school_id,
+                strategy=strategy,
+            )
+            cursor = 0
+
+        try:
+            page_size = max(1, min(30, int(request.query_params.get('page_size', '12'))))
+        except (TypeError, ValueError):
+            page_size = 12
+
+        page_ids = all_ids[cursor:cursor + page_size]
+        has_more = cursor + page_size < len(all_ids)
+        next_cursor = (cursor + page_size) if has_more else None
+
+        lessons = PersonalizedRecommendationService.fetch_lessons_ordered(page_ids)
+        serializer = serializers.LessonListSerializer(
+            lessons, many=True, context={'request': request}
+        )
+
+        next_url = self._snapshot_url(request, feed_token, next_cursor) if next_cursor is not None else None
+        prev_url = None
+        if cursor > 0:
+            prev_url = self._snapshot_url(request, feed_token, max(0, cursor - page_size))
+
+        return Response({
+            'results': serializer.data,
+            'next': next_url,
+            'previous': prev_url,
+            'count': len(all_ids),
+            'feed_token': feed_token,
+            'cursor': cursor,
+            'next_cursor': next_cursor,
+            'has_more': has_more,
+        })
+
+    def _snapshot_url(self, request, feed_token, cursor):
+        params = request.query_params.copy()
+        params['feed_token'] = feed_token
+        params['cursor'] = str(cursor)
+        params.pop('page', None)
+        return request.build_absolute_uri('?' + params.urlencode())
 
 
 class RecommendedFeedView(APIView):

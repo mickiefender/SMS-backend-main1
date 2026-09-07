@@ -95,10 +95,14 @@ class PersonalizedRecommendationService:
         user=None,
         guest_device_id: str = '',
         school_id: Optional[int] = None,
+        strategy: str = 'personalized',
     ) -> Tuple[str, List[int]]:
         """Build a fresh ranked id list and store it under a new token."""
         ranked = cls.build_ranked_feed(
-            user=user, guest_device_id=guest_device_id, school_id=school_id,
+            user=user,
+            guest_device_id=guest_device_id,
+            school_id=school_id,
+            strategy=strategy,
         )
         token = uuid.uuid4().hex[:16]
         owner = cls._owner_key(user, guest_device_id)
@@ -161,6 +165,7 @@ class PersonalizedRecommendationService:
         user=None,
         guest_device_id: str = '',
         school_id: Optional[int] = None,
+        strategy: str = 'personalized',
     ) -> List[FeedLesson]:
         """
         Produce a fully ranked, diversity-spaced list of lessons.
@@ -203,6 +208,12 @@ class PersonalizedRecommendationService:
 
         scored.sort(key=lambda item: (-item[0], -item[1]))
         ranked: List[FeedLesson] = [item[2] for item in scored]
+
+        # ── 3b. Re-center the ranking for a "latest" feed ───────
+        # A "latest" feed should surface newly published lessons first, but a
+        # bounded shuffle keeps pull-to-refresh from feeling stagnant.
+        if strategy == 'latest':
+            ranked = cls._reorder_latest(ranked)
 
         # ── 4a. Discovery interleaving ──────────────────────────
         ranked = cls._interleave_discovery(ranked, base_qs, signals['seen_ids'])
@@ -353,6 +364,25 @@ class PersonalizedRecommendationService:
             score -= cls.COMPLETED_PENALTY
 
         return score
+
+    @staticmethod
+    def _reorder_latest(ranked: List[FeedLesson]) -> List[FeedLesson]:
+        """Order a ranked list newest-first, with a bounded top shuffle.
+
+        Keeps the "latest" semantics (recently published at the top) while
+        letting pull-to-refresh surface a different set of recent lessons.
+        """
+        if not ranked:
+            return ranked
+        by_recency = sorted(
+            ranked,
+            key=lambda lesson: lesson.published_at,
+            reverse=True,
+        )
+        window = max(1, min(len(by_recency) - 1, 8))
+        head = by_recency[:window]
+        random.shuffle(head)
+        return head + by_recency[window:]
 
     @classmethod
     def _interleave_discovery(
