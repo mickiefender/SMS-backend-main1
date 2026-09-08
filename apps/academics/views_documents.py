@@ -635,6 +635,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
                     explain=response_mode == 'explain',
                 )
                 if result and 'error' not in result:
+                    if result.get('sources'):
+                        result['content'] += (
+                            "\n\nSources:\n" + "\n".join(
+                                f"- {source['title']}: {source['url']}"
+                                for source in result['sources']
+                            )
+                        )
                     return Response(result, status=status.HTTP_200_OK)
                 error_msg = result.get('error', 'Failed to generate AI response') if result else 'Failed to generate AI response'
                 return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
@@ -654,6 +661,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
             print(f"[generate_questions] AI result: {result}")
 
             if result and 'error' not in result:
+                if result.get('sources'):
+                    result['content'] += (
+                        "\n\nSources:\n" + "\n".join(
+                            f"- {source['title']}: {source['url']}"
+                            for source in result['sources']
+                        )
+                    )
                 return Response(result, status=status.HTTP_200_OK)
             else:
                 error_msg = result.get('error', 'Failed to generate questions') if result else 'Failed to generate questions'
