@@ -495,6 +495,201 @@ class StudentViewSet(viewsets.ModelViewSet):
             traceback.print_exc()
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=False, methods=['get'])
+    def my_classes(self, request):
+        """
+        Get classes assigned to the teacher.
+        This endpoint returns classes where the teacher is either a ClassTeacher (form tutor)
+        or a ClassSubjectTeacher (subject teacher).
+        """
+        ensure_connection()
+
+        try:
+            from apps.academics.models import Class, ClassTeacher, ClassSubjectTeacher
+
+            # Get class IDs where teacher is a ClassTeacher (form tutor)
+            class_teacher_class_ids = ClassTeacher.objects.filter(
+                teacher=request.user
+            ).values_list('class_obj_id', flat=True)
+
+            # Get class IDs where teacher is a ClassSubjectTeacher (subject teacher)
+            subject_teacher_class_ids = ClassSubjectTeacher.objects.filter(
+                teacher=request.user
+            ).values_list('class_obj_id', flat=True)
+
+            # Combine all class IDs
+            all_class_ids = set(list(class_teacher_class_ids) + list(subject_teacher_class_ids))
+
+            print(f"[TeacherClasses] Teacher: {request.user.id}, Classes: {all_class_ids}")
+
+            if not all_class_ids:
+                return Response({
+                    'count': 0,
+                    'results': [],
+                    'message': 'No classes assigned to this teacher'
+                })
+
+            # Get class details
+            classes = Class.objects.filter(id__in=all_class_ids).select_related('level')
+
+            results = []
+            for cls in classes:
+                # Get student count for this class
+                student_count = StudentClass.objects.filter(
+                    class_obj=cls,
+                    is_active=True
+                ).count()
+
+                # Check if teacher is form tutor
+                is_form_tutor = ClassTeacher.objects.filter(
+                    teacher=request.user,
+                    class_obj=cls
+                ).exists()
+
+                # Get subjects taught by this teacher in this class
+                subjects_taught = ClassSubjectTeacher.objects.filter(
+                    teacher=request.user,
+                    class_obj=cls
+                ).select_related('subject').values(
+                    'subject__id', 'subject__name', 'subject__code'
+                )
+
+                results.append({
+                    'id': cls.id,
+                    'name': cls.name,
+                    'class_code': cls.code,  # Changed from 'code' to 'class_code' for frontend compatibility
+                    'level': cls.level.name if cls.level else None,
+                    'student_count': student_count,
+                    'is_form_tutor': is_form_tutor,
+                    'subjects_taught': [
+                        {
+                            'id': s['subject__id'],
+                            'name': s['subject__name'],
+                            'code': s['subject__code']
+                        }
+                        for s in subjects_taught
+                    ]
+                })
+
+            print(f"[TeacherClasses] Found {len(results)} classes")
+
+            return Response({
+                'count': len(results),
+                'results': results
+            })
+
+        except Exception as e:
+            import traceback
+            print(f"[TeacherClasses] Error: {str(e)}")
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=500)
+
+    @action(detail=False, methods=['get'])
+    def my_students(self, request):
+        """
+        Get students enrolled in the teacher's classes.
+        This endpoint returns students assigned to classes where the teacher
+        is either a ClassTeacher (form tutor) or a ClassSubjectTeacher (subject teacher).
+        """
+        ensure_connection()
+
+        try:
+            # Get school_id from user
+            school_id = getattr(request.user, 'school_id', None)
+            if not school_id and hasattr(request.user, 'school'):
+                school_id = getattr(request.user.school, 'id', None)
+
+            # Get all classes where this teacher is assigned (as form tutor or subject teacher)
+            from apps.academics.models import ClassTeacher, ClassSubjectTeacher, UserProfilePicture
+
+            # Get class IDs where teacher is a ClassTeacher (form tutor)
+            class_teacher_class_ids = ClassTeacher.objects.filter(
+                teacher=request.user
+            ).values_list('class_obj_id', flat=True)
+
+            # Get class IDs where teacher is a ClassSubjectTeacher (subject teacher)
+            subject_teacher_class_ids = ClassSubjectTeacher.objects.filter(
+                teacher=request.user
+            ).values_list('class_obj_id', flat=True)
+
+            # Combine all class IDs
+            all_class_ids = set(list(class_teacher_class_ids) + list(subject_teacher_class_ids))
+
+            print(f"[TeacherStudents] Teacher: {request.user.id}, Classes: {all_class_ids}")
+
+            if not all_class_ids:
+                return Response({
+                    'count': 0,
+                    'results': [],
+                    'message': 'No classes assigned to this teacher'
+                })
+
+            # Get students enrolled in these classes - student is already a FK to User
+            student_class_entries = StudentClass.objects.filter(
+                class_obj_id__in=all_class_ids,
+                is_active=True
+            ).select_related('student', 'class_obj')
+
+            # Build unique student list with their class info
+            students_dict = {}
+            for entry in student_class_entries:
+                student_user = entry.student  # This is the User object directly
+                if student_user and student_user.id not in students_dict:
+                    # Get StudentProfile for additional fields
+                    try:
+                        student_profile = StudentProfile.objects.get(user=student_user)
+                        student_id = student_profile.student_id
+                        gender = student_profile.gender
+                        level = student_profile.level.name if student_profile.level else None
+                        roll_number = student_profile.roll_number
+                    except StudentProfile.DoesNotExist:
+                        student_id = None
+                        gender = None
+                        level = None
+                        roll_number = None
+
+                    # Get profile picture URL
+                    profile_picture_url = None
+                    try:
+                        profile_pic = UserProfilePicture.objects.get(user=student_user)
+                        profile_picture_url = profile_pic.storage_url or (profile_pic.picture.url if profile_pic.picture else None)
+                    except UserProfilePicture.DoesNotExist:
+                        profile_picture_url = None
+
+                    students_dict[student_user.id] = {
+                        'id': student_user.id,
+                        'user': {
+                            'id': student_user.id,
+                            'first_name': student_user.first_name,
+                            'last_name': student_user.last_name,
+                            'email': student_user.email,
+                        },
+                        'student_id': student_id,
+                        'gender': gender,
+                        'level': level,
+                        'class': {
+                            'id': entry.class_obj.id,
+                            'name': entry.class_obj.name,
+                        },
+                        'roll_number': roll_number,
+                        'profile_picture': profile_picture_url,
+                    }
+
+            results = list(students_dict.values())
+
+            print(f"[TeacherStudents] Found {len(results)} unique students")
+
+            return Response({
+                'count': len(results),
+                'results': results
+            })
+
+        except Exception as e:
+            import traceback
+            print(f"[TeacherStudents] Error: {str(e)}")
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=500)
+
 
 class ParentViewSet(viewsets.ModelViewSet):
     serializer_class = ParentSerializer
