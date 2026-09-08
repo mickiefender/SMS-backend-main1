@@ -409,6 +409,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         num_questions = int(request.data.get('num_questions', 5))
         question_type = request.data.get('question_type', 'multiple_choice')
         difficulty = request.data.get('difficulty', 'medium')
+        response_mode = request.data.get('response_mode', 'questions')
 
         # Verify permission by role
         user_role = getattr(request.user, 'role', None)
@@ -618,10 +619,25 @@ class DocumentViewSet(viewsets.ModelViewSet):
             school_name = getattr(request.user, 'school', None)
             school_name_str = school_name.name if school_name else "School"
 
-            from apps.academics.ai_service import generate_school_ai_questions
+            from apps.academics.ai_service import (
+                SchoolAIService,
+                generate_school_ai_questions,
+            )
 
             subject = getattr(document, 'related_subject', None)
             subject_str = subject.name if subject and hasattr(subject, 'name') else ""
+
+            if response_mode in ['general', 'explain']:
+                result = SchoolAIService(school_name_str).generate_response(
+                    user_prompt=request.data.get('topic', '').strip(),
+                    material_content=material_content,
+                    subject=subject_str,
+                    explain=response_mode == 'explain',
+                )
+                if result and 'error' not in result:
+                    return Response(result, status=status.HTTP_200_OK)
+                error_msg = result.get('error', 'Failed to generate AI response') if result else 'Failed to generate AI response'
+                return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
 
             print(f"[generate_questions] Calling AI for doc '{document.title}' — {num_questions} {question_type} questions")
 
@@ -667,6 +683,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             num_questions = int(request.data.get('num_questions', 5))
             question_type = request.data.get('question_type', 'multiple_choice')
             difficulty = request.data.get('difficulty', 'medium')
+            response_mode = request.data.get('response_mode', 'questions')
             
             print(f"[v0] Parsed parameters - topic: {topic}, subject: {subject}, num_questions: {num_questions}")
             
@@ -695,12 +712,28 @@ class DocumentViewSet(viewsets.ModelViewSet):
             print(f"[v0] School name: {school_name_str}")
             
             # Import AI service
-            from apps.academics.ai_service import generate_school_ai_questions
+            from apps.academics.ai_service import (
+                SchoolAIService,
+                generate_school_ai_questions,
+            )
             
             # Generate questions from topic
             material_content = f"Topic: {topic}"
             if subject:
                 material_content += f"\nSubject: {subject}"
+
+            if response_mode in ['general', 'explain']:
+                ai_service = SchoolAIService(school_name_str)
+                result = ai_service.generate_response(
+                    user_prompt=topic,
+                    material_content=material_content,
+                    subject=subject,
+                    explain=response_mode == 'explain',
+                )
+                if result and 'error' not in result:
+                    return Response(result, status=status.HTTP_200_OK)
+                error_msg = result.get('error', 'Failed to generate AI response') if result else 'Failed to generate AI response'
+                return Response({'error': error_msg}, status=status.HTTP_400_BAD_REQUEST)
             
             print(f"[v0] Calling AI service with content: {material_content}")
             

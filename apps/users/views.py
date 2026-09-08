@@ -44,6 +44,12 @@ class CurrentUserView(APIView):
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
 
+    def delete(self, request):
+        ensure_connection()
+        with transaction.atomic():
+            request.user.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class AuthViewSet(viewsets.ViewSet):
     permission_classes = [AllowAny]

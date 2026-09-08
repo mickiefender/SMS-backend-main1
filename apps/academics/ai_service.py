@@ -116,6 +116,83 @@ class SchoolAIService:
         except Exception as e:
             logger.error(f"Unexpected error in question generation: {str(e)}")
             return {"error": f"An error occurred: {str(e)}"}
+
+    def generate_response(
+        self,
+        user_prompt: str,
+        material_content: str = "",
+        subject: str = "",
+        explain: bool = False,
+    ) -> Optional[dict]:
+        """Generate a natural-language answer for student chat."""
+        if not user_prompt.strip():
+            return {"error": "Please provide a question"}
+        if not self.api_key:
+            logger.error("OpenAI API key not configured")
+            return {"error": "AI service not configured. Please add OPENAI_API_KEY"}
+
+        context = material_content.strip()
+        instruction = (
+            "Give a detailed, step-by-step explanation. Define important terms, "
+            "use clear examples, explain why each step matters, and finish with "
+            "a short recap."
+            if explain else
+            "Respond naturally and helpfully like a general-purpose AI assistant. "
+            "Answer the student's request directly, ask a clarifying question only "
+            "when necessary, and do not invent facts."
+        )
+        prompt = f"{instruction}\n\nStudent request:\n{user_prompt.strip()}"
+        if subject:
+            prompt += f"\n\nSubject context: {subject}"
+        if context:
+            prompt += f"\n\nLearning material context:\n{context[:12000]}"
+
+        try:
+            response = requests.post(
+                self.api_url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                f"You are {self.ai_name}, a helpful educational "
+                                "assistant. Return only the answer text, with no "
+                                "JSON wrapper and no meta-commentary."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.7 if not explain else 0.4,
+                    "max_tokens": 2500 if explain else 1500,
+                },
+                timeout=30,
+            )
+            if response.status_code != 200:
+                logger.error(f"OpenAI API error: {response.status_code} - {response.text}")
+                return {"error": f"API error: {response.status_code}"}
+
+            content = response.json().get("choices", [{}])[0].get(
+                "message", {}
+            ).get("content", "").strip()
+            if not content:
+                return {"error": "The AI returned an empty response"}
+            return {
+                "success": True,
+                "ai_name": self.ai_name,
+                "content": content,
+                "raw_response": True,
+            }
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request to OpenAI API failed: {str(e)}")
+            return {"error": f"Failed to connect to AI service: {str(e)}"}
+        except Exception as e:
+            logger.error(f"Unexpected error in response generation: {str(e)}")
+            return {"error": f"An error occurred: {str(e)}"}
     
     def _build_prompt(
         self,

@@ -25,5 +25,6 @@ urlpatterns = [
     # Returns 401 for expired/invalid refresh tokens (terminal session end).
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('me/', CurrentUserView.as_view(), name='current-user'),
+    path('profile/', CurrentUserView.as_view(), name='current-user-profile'),
     path('', include(router.urls)),
 ]
