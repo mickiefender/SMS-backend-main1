@@ -540,13 +540,21 @@ class StudentPortalViewSet(viewsets.ViewSet):
                 if not submission or submission.status == 'not_submitted':
                     pending_assignments += 1
             
-            # Performance - overall grade average
-            grades = Grade.objects.filter(student=user)
-            if grades.exists():
-                total_score = sum(float(g.score) for g in grades if g.score is not None)
-                overall = total_score / grades.count()
-            else:
-                overall = 0.0
+            # Match the student Results screen: use the latest teacher-entered
+            # grade for each subject, then average its raw score percentage.
+            grades = Grade.objects.filter(student=user).order_by(
+                'subject_id', '-updated_at', '-id'
+            )
+            latest_by_subject = {}
+            for grade in grades:
+                if grade.subject_id not in latest_by_subject:
+                    latest_by_subject[grade.subject_id] = grade
+            percentages = [
+                (float(grade.score) / float(grade.max_score) * 100)
+                for grade in latest_by_subject.values()
+                if grade.score is not None and grade.max_score
+            ]
+            overall = sum(percentages) / len(percentages) if percentages else 0.0
             
             return Response({
                 'total_classes': total_classes,
