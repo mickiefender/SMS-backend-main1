@@ -6,7 +6,11 @@ the correct category, notification_type, title, message, and deep-link metadata.
 Import these in your Django apps or signals to fire notifications.
 """
 from typing import Optional
-from apps.notifications.services.notification_service import send_notification, send_notification_to_class
+from apps.notifications.services.notification_service import (
+    send_notification,
+    send_notification_to_class,
+    send_notification_to_student_and_parents,
+)
 
 
 # ─── Feed ────────────────────────────────────────────────────────────────────
@@ -136,26 +140,34 @@ def notify_school_event(event):
 # ─── Assignments ─────────────────────────────────────────────────────────────
 
 def notify_new_assignment(assignment):
-    """New assignment posted to a class."""
+    """New assignment posted to a class (students + their parents)."""
     return send_notification_to_class(
         class_obj=assignment.class_obj,
         notification_type='new_assignment',
         category='assignment',
         title=f'New Assignment: {assignment.title}',
         message=f'{assignment.teacher.get_full_name()} posted "{assignment.title}" due {assignment.due_date.strftime("%b %d")}',
+        parent_title=f'New Assignment: {assignment.title}',
+        parent_message=(
+            'Your child {child_name} has a new assignment '
+            f'"{assignment.title}" posted by {assignment.teacher.get_full_name()}, '
+            f'due {assignment.due_date.strftime("%b %d")}'
+        ),
         target_screen='assignment_view',
         target_id=str(assignment.id),
     )
 
 
 def notify_assignment_graded(submission):
-    """Notify a student that their assignment was graded."""
-    return send_notification(
-        recipient=submission.student,
+    """Notify a student (and their parents) that their assignment was graded."""
+    return send_notification_to_student_and_parents(
+        student=submission.student,
         notification_type='assignment_graded',
         category='assignment',
         title=f'Assignment Graded: {submission.assignment.title}',
         message=f'Your assignment scored {submission.score:.0f}/100. Feedback: {submission.feedback[:100] if submission.feedback else "Check your results."}',
+        parent_title=f'Assignment Graded: {submission.assignment.title}',
+        parent_message=f'Your child scored {submission.score:.0f}/100 on "{submission.assignment.title}". Feedback: {submission.feedback[:100] if submission.feedback else "Check results."}',
         target_screen='assignment_view',
         target_id=str(submission.assignment_id),
         priority='high',
@@ -165,13 +177,15 @@ def notify_assignment_graded(submission):
 # ─── Grades ──────────────────────────────────────────────────────────────────
 
 def notify_grade_posted(student, subject_name, grade, term):
-    """Notify a student that a grade was posted."""
-    return send_notification(
-        recipient=student,
+    """Notify a student (and their parents) that a grade was posted."""
+    return send_notification_to_student_and_parents(
+        student=student,
         notification_type='grade_posted',
         category='grade',
         title=f'Grade Posted: {subject_name}',
         message=f'Your grade for {subject_name} ({term}) has been posted: {grade}',
+        parent_title=f'Grade Posted: {subject_name}',
+        parent_message=f'Your child\'s grade for {subject_name} ({term}) has been posted: {grade}',
         target_screen='grade_view',
         target_id=str(student.id),
         priority='high',
@@ -179,15 +193,20 @@ def notify_grade_posted(student, subject_name, grade, term):
 
 
 def notify_exam_result_posted(result):
-    """Notify a student that their exam result has been recorded."""
+    """Notify a student (and their parents) that their exam result has been recorded."""
     subject_name = result.exam.subject.name if result.exam.subject else 'a subject'
-    return send_notification(
-        recipient=result.student,
+    return send_notification_to_student_and_parents(
+        student=result.student,
         notification_type='grade_posted',
         category='grade',
         title=f'Grade Posted: {subject_name}',
         message=(
             f'Your grade for {subject_name} has been posted: '
+            f'{result.grade or "N/A"} ({result.percentage:.0f}%).'
+        ),
+        parent_title=f'Grade Posted: {subject_name}',
+        parent_message=(
+            f'Your child\'s grade for {subject_name} has been posted: '
             f'{result.grade or "N/A"} ({result.percentage:.0f}%).'
         ),
         target_screen='grade_view',
@@ -214,12 +233,17 @@ def notify_grade_posted_from_grade(grade):
         f'Your grade for {assessment_label} ({subject_name}) has been posted: '
         f'{grade.grade or "N/A"} ({grade.percentage:.1f}%).'
     )
-    return send_notification(
-        recipient=grade.student,
+    return send_notification_to_student_and_parents(
+        student=grade.student,
         notification_type='grade_posted',
         category='grade',
         title=f'Grade Posted: {subject_name}',
         message=message,
+        parent_title=f'Grade Posted: {subject_name}',
+        parent_message=(
+            f'Your child\'s grade for {assessment_label} ({subject_name}) has been posted: '
+            f'{grade.grade or "N/A"} ({grade.percentage:.1f}%).'
+        ),
         target_screen='grade_view',
         target_id=str(grade.id),
         priority='high',
@@ -229,15 +253,17 @@ def notify_grade_posted_from_grade(grade):
 # ─── Attendance ──────────────────────────────────────────────────────────────
 
 def notify_attendance_marked(student, date, status):
-    """Notify a student that their attendance was marked."""
+    """Notify a student (and their parents) that their attendance was marked."""
     status_label = {'present': 'Present', 'absent': 'Absent', 'late': 'Late', 'excused': 'Excused'}
     label = status_label.get(status, status)
-    return send_notification(
-        recipient=student,
+    return send_notification_to_student_and_parents(
+        student=student,
         notification_type='attendance_marked',
         category='attendance',
         title=f'Attendance: {label}',
         message=f'Your attendance for {date.strftime("%b %d, %Y")} has been marked: {label}',
+        parent_title=f'Attendance Update: {label}',
+        parent_message=f'Your child\'s attendance for {date.strftime("%b %d, %Y")} has been marked: {label}',
         target_screen='attendance_view',
         priority='low',
     )
@@ -246,13 +272,15 @@ def notify_attendance_marked(student, date, status):
 # ─── Fees ────────────────────────────────────────────────────────────────────
 
 def notify_fee_reminder(student, fee):
-    """Remind a student/parent about an upcoming or overdue fee."""
-    return send_notification(
-        recipient=student,
+    """Remind a student (and their parents) about an upcoming or overdue fee."""
+    return send_notification_to_student_and_parents(
+        student=student,
         notification_type='fee_reminder',
         category='fee_reminder',
         title=f'Fee Reminder: {fee.name}',
         message=f'{fee.name} fee of GHS {fee.amount:.2f} is due {fee.due_date.strftime("%b %d, %Y")}',
+        parent_title=f'Fee Reminder: {fee.name}',
+        parent_message=f'Your child has a fee of GHS {fee.amount:.2f} for {fee.name} due {fee.due_date.strftime("%b %d, %Y")}',
         target_screen='fee_view',
         target_id=str(fee.id),
         priority='high',
@@ -261,12 +289,14 @@ def notify_fee_reminder(student, fee):
 
 def notify_fee_payment_confirmed(student, fee, amount_paid):
     """Confirm that a fee payment was received."""
-    return send_notification(
-        recipient=student,
+    return send_notification_to_student_and_parents(
+        student=student,
         notification_type='fee_payment_confirmed',
         category='fee_reminder',
         title=f'Payment Received: {fee.name}',
         message=f'Payment of GHS {amount_paid:.2f} for {fee.name} has been confirmed.',
+        parent_title=f'Payment Received: {fee.name}',
+        parent_message=f'Payment of GHS {amount_paid:.2f} for {fee.name} has been confirmed for your child.',
         target_screen='fee_view',
         target_id=str(fee.id),
     )

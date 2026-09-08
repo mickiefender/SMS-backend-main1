@@ -55,13 +55,18 @@ def send_scheduled_reminders():
             studentprofile__in=assignment.class_obj.studentclass_set.all()
         )
         for student in students:
-            from apps.notifications.services.notification_service import send_notification
-            send_notification(
-                recipient=student,
+            from apps.notifications.services.notification_service import send_notification_to_student_and_parents
+            send_notification_to_student_and_parents(
+                student=student,
                 notification_type='assignment_reminder',
                 category='assignment_reminder',
                 title=f'Assignment Due: {assignment.title}',
                 message=f'Your assignment "{assignment.title}" is due {assignment.due_date.strftime("%b %d")}',
+                parent_title=f'Assignment Due: {assignment.title}',
+                parent_message=(
+                    'Your child {child_name} has an assignment '
+                    f'"{assignment.title}" due {assignment.due_date.strftime("%b %d")}'
+                ),
                 target_screen='assignment_view',
                 target_id=str(assignment.id),
                 priority='high',
@@ -77,13 +82,18 @@ def send_scheduled_reminders():
     ).select_related('student')
 
     for fee in upcoming_fees:
-        from apps.notifications.services.notification_service import send_notification
-        send_notification(
-            recipient=fee.student,
+        from apps.notifications.services.notification_service import send_notification_to_student_and_parents
+        send_notification_to_student_and_parents(
+            student=fee.student,
             notification_type='fee_reminder',
             category='fee_reminder',
             title=f'Fee Reminder: {fee.name}',
             message=f'Your {fee.name} fee of GHS {fee.amount:.2f} is due {fee.due_date.strftime("%b %d")}',
+            parent_title=f'Fee Reminder: {fee.name}',
+            parent_message=(
+                f'Your child has a {fee.name} fee of GHS {fee.amount:.2f} '
+                f'due {fee.due_date.strftime("%b %d")}'
+            ),
             target_screen='fee_view',
             target_id=str(fee.id),
             priority='high',

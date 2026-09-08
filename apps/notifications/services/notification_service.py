@@ -147,26 +147,57 @@ def send_notification(
     return notification
 
 
-def send_notification_to_class(
-    class_obj,
+# ─── Parent notification helpers ────────────────────────────────────────────
+
+def get_approved_parents(student):
+    """Return the approved parent Users linked to a student."""
+    from apps.users.models import ParentStudentRelationship
+
+    parent_ids = ParentStudentRelationship.objects.filter(
+        student=student, status='approved'
+    ).values_list('parent_id', flat=True).distinct()
+    return User.objects.filter(id__in=parent_ids, is_active=True)
+
+
+def _child_name(user):
+    """Best-effort display name for a user."""
+    return user.get_full_name() or user.username
+
+
+def _with_child_name(text, child_name):
+    """Substitute the {child_name} placeholder in a title/message template."""
+    if isinstance(text, str) and '{child_name}' in text:
+        return text.replace('{child_name}', child_name)
+    return text
+
+
+def send_notification_to_student_and_parents(
+    student,
     notification_type: str,
     category: str,
     title: str,
     message: str,
+    parent_title: str = None,
+    parent_message: str = None,
     target_screen: str = '',
     target_id: str = '',
+    image_url: str = '',
     priority: str = 'normal',
+    extra_data: Optional[Dict] = None,
+    skip_student: bool = False,
+    skip_parents: bool = False,
 ) -> List[Notification]:
-    """Send a notification to all students in a specific class."""
-    from apps.academics.models import StudentClass
+    """
+    Send a notification to a student and all their approved parents.
 
-    student_ids = StudentClass.objects.filter(
-        class_obj=class_obj, is_active=True
-    ).values_list('student_id', flat=True)
+    The parent copy defaults to the student's title/message. If parent_title
+    or parent_message is provided it is used instead, and any "{child_name}"
+    placeholder is replaced with the student's display name.
+    """
+    created: List[Notification] = []
+    name = _child_name(student)
 
-    students = User.objects.filter(id__in=student_ids, role='student', is_active=True)
-    created = []
-    for student in students:
+    if not skip_student:
         n = send_notification(
             recipient=student,
             notification_type=notification_type,
@@ -175,10 +206,77 @@ def send_notification_to_class(
             message=message,
             target_screen=target_screen,
             target_id=target_id,
+            image_url=image_url,
             priority=priority,
+            extra_data=extra_data,
         )
         if n:
             created.append(n)
+
+    if not skip_parents:
+        p_title = _with_child_name(parent_title or title, name)
+        p_message = _with_child_name(parent_message or message, name)
+        for parent in get_approved_parents(student):
+            n = send_notification(
+                recipient=parent,
+                notification_type=notification_type,
+                category=category,
+                title=p_title,
+                message=p_message,
+                target_screen=target_screen,
+                target_id=target_id,
+                image_url=image_url,
+                priority=priority,
+                extra_data=extra_data,
+            )
+            if n:
+                created.append(n)
+
+    return created
+
+
+def send_notification_to_class(
+    class_obj,
+    notification_type: str,
+    category: str,
+    title: str,
+    message: str,
+    parent_title: str = None,
+    parent_message: str = None,
+    target_screen: str = '',
+    target_id: str = '',
+    priority: str = 'normal',
+    notify_parents: bool = True,
+) -> List[Notification]:
+    """
+    Send a notification to all students in a class, plus each student's parents.
+
+    parent_title / parent_message may contain the "{child_name}" placeholder,
+    which is replaced with each student's name.
+    """
+    from apps.academics.models import StudentClass
+
+    student_ids = StudentClass.objects.filter(
+        class_obj=class_obj, is_active=True
+    ).values_list('student_id', flat=True)
+
+    students = User.objects.filter(id__in=student_ids, role='student', is_active=True)
+    created: List[Notification] = []
+    for student in students:
+        batch = send_notification_to_student_and_parents(
+            student=student,
+            notification_type=notification_type,
+            category=category,
+            title=title,
+            message=message,
+            parent_title=parent_title,
+            parent_message=parent_message,
+            target_screen=target_screen,
+            target_id=target_id,
+            priority=priority,
+            skip_parents=not notify_parents,
+        )
+        created.extend(batch)
     return created
 
 

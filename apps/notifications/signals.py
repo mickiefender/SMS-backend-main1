@@ -201,3 +201,34 @@ def exam_result_saved(sender, instance, created, **kwargs):
         notify_exam_result_posted(instance)
     except Exception as e:
         logger.error(f'Failed to send exam result notification: {e}')
+
+
+# ─── Grade (students.Grade) Signals ──────────────────────────────────────────
+
+@receiver(pre_save, sender='students.Grade')
+def cache_grade_previous_values(sender, instance, **kwargs):
+    """Cache the previous score so post_save can detect a real change."""
+    if not instance.pk:
+        instance._previous_score = None
+        return
+    try:
+        previous = sender.objects.get(pk=instance.pk)
+        instance._previous_score = previous.score
+    except sender.DoesNotExist:
+        instance._previous_score = None
+
+
+@receiver(post_save, sender='students.Grade')
+def grade_posted_saved(sender, instance, created, **kwargs):
+    """When a grade is posted or its score changes, notify student + parents."""
+    score_changed = (not created) and (
+        getattr(instance, '_previous_score', None) != instance.score
+    )
+    if not created and not score_changed:
+        return
+
+    try:
+        from apps.notifications.senders import notify_grade_posted_from_grade
+        notify_grade_posted_from_grade(instance)
+    except Exception as e:
+        logger.error(f'Failed to send grade notification: {e}')
