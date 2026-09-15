@@ -4,13 +4,25 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.views import APIView
+from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth import authenticate
 from django.db import connection, OperationalError, IntegrityError, transaction
 from django.db.models import Count, Q
+from rest_framework.exceptions import ValidationError
 from core.permissions import IsSchoolAdminOrHigher, IsSuperAdmin, CanManageAdminStaff
 from apps.users.models import User, TeacherProfile, StudentProfile, RolePermission, ParentStudentRelationship
 from apps.academics.models import (
-    StudentClass, Class, ClassSubject, Timetable, AcademicSession, TerminalReport, SubjectScore,
+    StudentClass,
+    Class,
+    ClassSubject,
+    Timetable,
+    AcademicSession,
+    TerminalReport,
+    SubjectScore,
+)
+from apps.academics.enrollment_service import (
+    get_current_academic_year,
+    sync_student_year_enrollment,
 )
 from apps.attendance.models import Attendance
 from apps.assignments.models import Assignment, AssignmentSubmission
@@ -18,13 +30,28 @@ from apps.billing.models import StudentFeeAssignment, ManualPayment, OnlinePayme
 from apps.students.models import Grade
 from apps.students.serializers import GradeSerializer
 from apps.academics.serializers import (
-    TimetableSerializer, TerminalReportListSerializer, ClassSerializer,
+    TimetableSerializer,
+    TerminalReportListSerializer,
+    ClassSerializer,
+)
+
+from apps.academics.models import StudentClass
+from apps.academics.enrollment_service import (
+    get_current_academic_year,
+    sync_student_year_enrollment,
+
 )
 from apps.users.serializers import (
     UserSerializer, RegisterSerializer, LoginSerializer, AdminStaffCreateSerializer,
     TeacherProfileSerializer, StudentProfileSerializer, ParentSerializer, ParentStudentRelationshipSerializer
 )
 import time
+
+
+class UserPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 def ensure_connection():
@@ -173,6 +200,7 @@ class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = UserPagination
 
     def get_permissions(self):
         if self.action in ['ban_user', 'suspend_user', 'reset_password', 'assign_global_role', 'global_stats']:
@@ -397,6 +425,38 @@ class StudentViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    # ── Academic year helpers ──────────────────────────────────────────────
+
+    def _resolve_academic_year(self, raw_value, school_id):
+        """Validate a submitted academic-year id against the caller's school.
+
+        Blank values clear the field (``None``). Anything else must resolve to
+        an ``AcademicYear`` in the same school, otherwise the request is a 400.
+        """
+        if raw_value in (None, '', 'null', 'undefined', 0, '0'):
+            return None
+        try:
+            year_id = int(raw_value)
+        except (TypeError, ValueError):
+            raise ValidationError({'academic_year': 'Provide a valid academic year id.'})
+
+        from apps.academics.models import AcademicYear
+
+        year = AcademicYear.objects.filter(id=year_id, school_id=school_id).first()
+        if year is None:
+            raise ValidationError({'academic_year': 'Academic year not found in your school.'})
+        return year
+
+    def _assign_current_academic_year(self, profile):
+        """Put a freshly onboarded student in the school's current year."""
+        if profile.academic_year_id:
+            return profile.academic_year
+        year = get_current_academic_year(profile.user.school_id)
+        if year is not None:
+            profile.academic_year = year
+            profile.save(update_fields=['academic_year', 'updated_at'])
+        return year
+
     def update(self, request, *args, **kwargs):
         """
         Update both the linked User record (name, email, phone, username)
@@ -447,7 +507,16 @@ class StudentViewSet(viewsets.ModelViewSet):
             if 'roll_number' in request.data:
                 instance.roll_number = request.data['roll_number'] or ''
 
+            # The academic year can also be changed through the profile form.
+            if 'academic_year' in request.data:
+                instance.academic_year = self._resolve_academic_year(
+                    request.data.get('academic_year'), instance.user.school_id
+                )
+
             instance.save()
+
+            if 'academic_year' in request.data and instance.academic_year_id:
+                sync_student_year_enrollment(instance.user, academic_year=instance.academic_year)
 
             serializer = self.get_serializer(instance)
             return Response(serializer.data)
@@ -483,8 +552,16 @@ class StudentViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(data=student_data)
             serializer.is_valid(raise_exception=True)
             self.perform_create(serializer)
+
+            # Onboarding puts the student straight into the school's current
+            # academic year, and (when a class is already assigned) records the
+            # matching year-based enrollment so promotion sees them at once.
+            profile = serializer.instance
+            self._assign_current_academic_year(profile)
+            sync_student_year_enrollment(profile.user, academic_year=profile.academic_year)
+
             headers = self.get_success_headers(serializer.data)
-            return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+            return Response(self.get_serializer(profile).data, status=status.HTTP_201_CREATED, headers=headers)
 
         except IntegrityError as e:
             # This might still happen if there's a unique constraint violation on another field
@@ -500,6 +577,7 @@ class StudentViewSet(viewsets.ModelViewSet):
             import traceback
             traceback.print_exc()
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
     @action(detail=False, methods=['get'])
     def my_classes(self, request):
@@ -695,6 +773,31 @@ class StudentViewSet(viewsets.ModelViewSet):
             print(f"[TeacherStudents] Error: {str(e)}")
             traceback.print_exc()
             return Response({'error': str(e)}, status=500)
+
+    @action(detail=True, methods=['post'], url_path='academic-year')
+    def set_academic_year(self, request, pk=None):
+        """Change the academic year a student belongs to.
+
+        Body: ``{"academic_year": <id>}`` — pass null/blank to clear it. When
+        the student already has a class, the year-based enrollment is kept in
+        sync so promotion and the per-year history stay correct.
+        """
+        profile = self.get_object()
+        year = self._resolve_academic_year(
+            request.data.get('academic_year'), profile.user.school_id
+        )
+
+        with transaction.atomic():
+            profile.academic_year = year
+            profile.save(update_fields=['academic_year', 'updated_at'])
+            enrollment = None
+            if year is not None:
+                enrollment = sync_student_year_enrollment(profile.user, academic_year=year)
+
+        data = self.get_serializer(profile).data
+        data['enrollment_synced'] = enrollment is not None
+        return Response(data)
+
 
 
 class ParentViewSet(viewsets.ModelViewSet):

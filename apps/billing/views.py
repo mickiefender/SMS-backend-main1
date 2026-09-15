@@ -638,7 +638,7 @@ class SuperAdminBillingViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def overview(self, request):
-        from apps.schools.models import School
+        from apps.schools.models import Plan, School, Subscription
         invoices = Invoice.objects.all()
         payments = Payment.objects.all()
         online_payments = OnlinePayment.objects.all()
@@ -646,6 +646,23 @@ class SuperAdminBillingViewSet(viewsets.ViewSet):
         total_invoice_amount = invoices.aggregate(total=Sum('amount'))['total'] or 0
         total_paid_amount = payments.filter(status='completed').aggregate(total=Sum('amount'))['total'] or 0
         total_online_success = online_payments.filter(status='success').aggregate(total=Sum('amount'))['total'] or 0
+        today = timezone.localdate()
+        active_subscriptions = Subscription.objects.filter(
+            status='active',
+            end_date__gte=today,
+        ).count()
+        expiring_subscriptions = Subscription.objects.filter(
+            status='active',
+            end_date__gte=today,
+            end_date__lte=today + timedelta(days=7),
+        ).count()
+        cancelled_subscriptions = Subscription.objects.filter(
+            status__in=['cancelled', 'inactive'],
+        ).count()
+        expired_subscriptions = Subscription.objects.filter(
+            status='active',
+            end_date__lt=today,
+        ).count()
 
         return Response({
             'total_schools': School.objects.count(),
@@ -654,6 +671,18 @@ class SuperAdminBillingViewSet(viewsets.ViewSet):
             'total_invoice_amount': float(total_invoice_amount),
             'total_paid_amount': float(total_paid_amount),
             'total_online_success_amount': float(total_online_success),
+            'revenue_total': float(total_paid_amount + total_online_success),
+            'subscriptions': {
+                'total': Subscription.objects.count(),
+                'active': active_subscriptions,
+                'expiring_soon': expiring_subscriptions,
+                'cancelled': cancelled_subscriptions,
+                'expired': expired_subscriptions,
+            },
+            'plans': {
+                'total': Plan.objects.count(),
+                'active': Plan.objects.filter(is_active=True).count(),
+            },
             'payment_status_breakdown': list(payments.values('status').annotate(count=Count('id')).order_by('status'))
         })
 
@@ -692,16 +721,38 @@ class SuperAdminBillingViewSet(viewsets.ViewSet):
         except (School.DoesNotExist, Plan.DoesNotExist):
             return Response({'error': 'Invalid school or plan'}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            parsed_end_date = timezone.datetime.fromisoformat(str(end_date))
+            if timezone.is_naive(parsed_end_date):
+                parsed_end_date = timezone.make_aware(parsed_end_date)
+            end_date_value = parsed_end_date.date()
+        except (TypeError, ValueError):
+            return Response({'error': 'end_date must be a valid date'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if end_date_value < timezone.localdate():
+            return Response({'error': 'end_date cannot be before today'}, status=status.HTTP_400_BAD_REQUEST)
+
+        today = timezone.localdate()
         school.plan = plan
-        school.save(update_fields=['plan', 'updated_at'])
+        school.subscription_start = today
+        school.subscription_end = end_date_value
+        school.save(update_fields=[
+            'plan', 'subscription_start', 'subscription_end', 'updated_at',
+        ])
 
         subscription, _ = Subscription.objects.get_or_create(
             school=school,
-            defaults={'plan': plan, 'status': 'active', 'end_date': end_date}
+            defaults={
+                'plan': plan,
+                'status': 'active',
+                'start_date': today,
+                'end_date': end_date_value,
+            }
         )
         subscription.plan = plan
         subscription.status = 'active'
-        subscription.end_date = end_date
+        subscription.start_date = today
+        subscription.end_date = end_date_value
         subscription.save()
 
         return Response({'status': 'success', 'message': 'Plan assigned successfully'})

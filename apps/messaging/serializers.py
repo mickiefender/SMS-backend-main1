@@ -1,5 +1,8 @@
 from rest_framework import serializers
-from .models import Message, Announcement, AnnouncementRead, Notice, PersonalNotice
+from .models import (
+    Message, Announcement, AnnouncementRead, Notice, PersonalNotice,
+    SMSConfiguration, SMSBalance, SMSTemplate, SMSMessage, SMSJob,
+)
 
 
 class PersonalNoticeSerializer(serializers.ModelSerializer):
@@ -64,3 +67,60 @@ class NoticeSerializer(serializers.ModelSerializer):
 
     def get_recipient_names(self, obj):
         return [u.get_full_name() or u.username for u in obj.recipients.all()]
+
+
+class SMSConfigurationSerializer(serializers.ModelSerializer):
+    school_name = serializers.CharField(source="school.name", read_only=True)
+
+    class Meta:
+        model = SMSConfiguration
+        fields = [
+            "id", "school", "school_name", "sender_id", "sender_id_status",
+            "rejection_reason", "is_enabled", "created_at", "updated_at",
+        ]
+        read_only_fields = [
+            "id", "school", "school_name", "sender_id_status",
+            "rejection_reason", "created_at", "updated_at",
+        ]
+
+
+class SMSBalanceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SMSBalance
+        fields = ["credits", "updated_at"]
+        read_only_fields = fields
+
+
+class SMSTemplateSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source="created_by.get_full_name", read_only=True)
+
+    class Meta:
+        model = SMSTemplate
+        fields = [
+            "id", "name", "message", "category", "is_active", "created_by",
+            "created_by_name", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_by", "created_by_name", "created_at", "updated_at"]
+
+
+class SMSMessageSerializer(serializers.ModelSerializer):
+    sent_by_name = serializers.CharField(source="sent_by.get_full_name", read_only=True)
+
+    class Meta:
+        model = SMSMessage
+        fields = [
+            "id", "job", "sender_id", "recipient", "message", "category", "status",
+            "provider_message_id", "error_message", "message_parts", "credits_used",
+            "sent_by", "sent_by_name", "created_at", "delivered_at",
+        ]
+        read_only_fields = fields
+
+
+class SMSJobSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SMSJob
+        fields = [
+            "id", "status", "recipient_count", "credits_reserved",
+            "created_at", "completed_at",
+        ]
+        read_only_fields = fields

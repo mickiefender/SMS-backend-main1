@@ -1,11 +1,12 @@
 from django.db import models
+from django.utils import timezone
 
 
 class Plan(models.Model):
     PLAN_CHOICES = (
         ('starter', 'Starter'),
-        ('professional', 'Professional'),
-        ('enterprise', 'Enterprise'),
+        ('standard', 'Standard'),
+        ('premium', 'Premium'),
     )
     
     name = models.CharField(max_length=50, choices=PLAN_CHOICES, unique=True)
@@ -98,7 +99,7 @@ class Subscription(models.Model):
     school = models.OneToOneField(School, on_delete=models.CASCADE, related_name='subscription')
     plan = models.ForeignKey(Plan, on_delete=models.SET_NULL, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
-    start_date = models.DateField(auto_now_add=True)
+    start_date = models.DateField(default=timezone.localdate)
     end_date = models.DateField()
     auto_renew = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

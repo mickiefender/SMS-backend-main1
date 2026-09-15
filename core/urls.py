@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/platform/', include('apps.platform.urls')),
     path('api/students/', include('apps.students.urls')),
     path('api/messaging/', include('apps.messaging.urls')),
+    path('api/admin/sms/', include('apps.messaging.admin_sms_urls')),
     path('api/feed/', include('apps.feed.urls')),
     # Centralized notifications API — must come BEFORE the legacy
     # /api/notifications/ router below, otherwise requests like

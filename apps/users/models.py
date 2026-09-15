@@ -9,6 +9,7 @@ from django.db import transaction
 class User(AbstractUser):
     ROLE_CHOICES = (
         ('super_admin', 'Super Admin'),
+        ('platform_staff', 'Platform Staff'),
         ('school_admin', 'School Admin'),
         ('academic_admin', 'Academic Admin'),
         ('exam_officer', 'Exam Officer'),
@@ -114,6 +115,17 @@ class StudentProfile(models.Model):
     student_id = models.CharField(max_length=50, unique=True, blank=True)
     level = models.ForeignKey('academics.Level', on_delete=models.SET_NULL, null=True, blank=True)
     department = models.ForeignKey('academics.Department', on_delete=models.SET_NULL, null=True, blank=True)
+    # The academic year the student is currently enrolled in (e.g. "2025/2026").
+    # Auto-set to the school's current year when the profile is created; a school
+    # admin can change it later from the student detail page.
+    academic_year = models.ForeignKey(
+        'academics.AcademicYear',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='students_in_year',
+        help_text='Current academic year the student belongs to.',
+    )
     enrollment_date = models.DateField(auto_now_add=True)
     date_of_birth = models.DateField(null=True, blank=True)
     # Extended personal fields

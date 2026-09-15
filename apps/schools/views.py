@@ -2,6 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.shortcuts import get_object_or_404
 from django.db.models import Count, Sum, Q
 from django.utils import timezone
 from datetime import timedelta
@@ -39,10 +40,23 @@ class SchoolViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         if self.request.user.role == 'super_admin':
-            return School.objects.all()
+            return School.objects.select_related('plan', 'subscription__plan').all()
         if hasattr(self.request.user, 'school') and self.request.user.school:
-            return School.objects.filter(id=self.request.user.school.id)
+            return School.objects.select_related('plan', 'subscription__plan').filter(id=self.request.user.school.id)
         return School.objects.none()
+
+    @action(detail=False, methods=['get'])
+    def subscription_status(self, request):
+        school_id = request.user.school_id
+        if request.user.role == 'super_admin':
+            school_id = request.query_params.get('school_id')
+        if not school_id:
+            return Response({'error': 'School not found'}, status=status.HTTP_400_BAD_REQUEST)
+        school = get_object_or_404(
+            School.objects.select_related('plan', 'subscription__plan'),
+            id=school_id,
+        )
+        return Response(SchoolSerializer(school).data['subscription_details'])
     
     @action(detail=False, methods=['get'])
     def dashboard_stats(self, request):
@@ -156,16 +170,28 @@ class SchoolViewSet(viewsets.ModelViewSet):
         )
         online_map = {r['school_id']: float(r['total'] or 0) for r in online_rev}
 
-        schools = School.objects.select_related('plan').only(
-            'id', 'name', 'status', 'plan__name'
-        )
+        schools = School.objects.select_related('plan', 'subscription__plan')
         data = []
         for school in schools:
             sc = counts.get(school.id, {'students': 0, 'teachers': 0})
+            subscription = getattr(school, 'subscription', None)
+            days_remaining = None
+            subscription_status = 'none'
+            if subscription:
+                days_remaining = (subscription.end_date - timezone.localdate()).days
+                subscription_status = (
+                    'expired' if days_remaining < 0 or subscription.status != 'active'
+                    else 'expiring_soon' if days_remaining <= 7
+                    else 'active'
+                )
             data.append({
                 'school_id': school.id,
                 'school_name': school.name,
                 'plan': school.plan.name if school.plan else None,
+                'subscription_start': subscription.start_date if subscription else None,
+                'subscription_end': subscription.end_date if subscription else None,
+                'subscription_status': subscription_status,
+                'days_remaining': max(days_remaining, 0) if days_remaining is not None else None,
                 'students': sc['students'],
                 'teachers': sc['teachers'],
                 'storage_used_mb': 0,

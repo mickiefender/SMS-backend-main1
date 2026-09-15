@@ -28,6 +28,10 @@ from apps.academics.models import (
 )
 
 VALID_ACTIONS = {'promote', 'repeat', 'graduate', 'withdraw', 'transfer'}
+# A student can be promoted again after arriving in a year through a previous
+# promotion. Those destination rows are recorded as promoted/repeating rather
+# than active, but still represent current enrollment for that academic year.
+SOURCE_ENROLLMENT_STATUSES = {'active', 'promoted', 'repeating'}
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +215,7 @@ def build_promotion_preview(school_id, source_year, dest_year, class_ids=None):
         StudentEnrollment.objects.filter(
             school_id=school_id,
             academic_year=source_year,
-            status='active',
+            status__in=SOURCE_ENROLLMENT_STATUSES,
         )
         .select_related('student', 'class_obj', 'class_obj__level')
         .order_by('class_obj__name', 'student__first_name', 'student__last_name')
@@ -424,26 +428,30 @@ def execute_promotions(school_id, user, source_year, dest_year, decisions):
             ))
             continue
 
-        # Lock the source enrollment row to avoid concurrent double-promotion.
-        source_enrollment = (
-            StudentEnrollment.objects.select_for_update()
-            .filter(student_id=student_id, academic_year=source_year, school_id=school_id)
-            .first()
-        )
-        if not source_enrollment:
-            records.append(PromotionRecord(
-                **base_record, status='failed',
-                error_message=f'No active enrollment found in {source_year.name}',
-            ))
-            continue
-
-        base_record.update({
-            'source_enrollment': source_enrollment,
-            'from_class': source_enrollment.class_obj,
-            'final_average': compute_final_average(student_id, school_id),
-        })
-
+        decision_savepoint = transaction.savepoint()
         try:
+            # Keep every database operation for this student inside the
+            # savepoint. A constraint failure must not break the batch's
+            # surrounding transaction.
+            source_enrollment = (
+                StudentEnrollment.objects.select_for_update()
+                .filter(student_id=student_id, academic_year=source_year, school_id=school_id)
+                .first()
+            )
+            if not source_enrollment:
+                records.append(PromotionRecord(
+                    **base_record, status='failed',
+                    error_message=f'No active enrollment found in {source_year.name}',
+                ))
+                transaction.savepoint_commit(decision_savepoint)
+                continue
+
+            base_record.update({
+                'source_enrollment': source_enrollment,
+                'from_class': source_enrollment.class_obj,
+                'final_average': compute_final_average(student_id, school_id),
+            })
+
             if action == 'promote':
                 rule = rules.get(source_enrollment.class_obj_id)
                 target_class_id = override_class_id or (rule.to_class_id if rule else None)
@@ -456,6 +464,7 @@ def execute_promotions(school_id, user, source_year, dest_year, decisions):
                 ).exists():
                     records.append(PromotionRecord(**base_record, status='skipped',
                                                    warning=f'Already enrolled in {dest_year.name}'))
+                    transaction.savepoint_commit(decision_savepoint)
                     continue
 
                 dest_enrollment = StudentEnrollment.objects.create(
@@ -481,6 +490,7 @@ def execute_promotions(school_id, user, source_year, dest_year, decisions):
                 ).exists():
                     records.append(PromotionRecord(**base_record, status='skipped',
                                                    warning=f'Already enrolled in {dest_year.name}'))
+                    transaction.savepoint_commit(decision_savepoint)
                     continue
 
                 StudentEnrollment.objects.create(
@@ -520,8 +530,28 @@ def execute_promotions(school_id, user, source_year, dest_year, decisions):
                                                reason='Transferred out'))
 
         except Exception as exc:
+            # Roll back only this student's work. The outer transaction must
+            # remain usable so the batch can persist a failed record and
+            # continue processing other students.
+            # ORDER MATTERS: Model.save()/create() and QuerySet.update() are
+            # wrapped in `mark_for_rollback_on_error`. The instant such a
+            # write raises, it sets the connection flag `needs_rollback = True`
+            # (and stores the original exception in `rollback_exc`). While
+            # that flag is set, every further query — including the savepoint
+            # ROLLBACK immediately below — is rejected with:
+            #   TransactionManagementError: An error occurred in the current
+            #   transaction. You can't execute queries until the end of the
+            #   'atomic' block.
+            # Django's own Atomic.__exit__ clears the flag BEFORE restoring
+            # the savepoint; do exactly the same here, otherwise the first
+            # failing student aborts the entire batch with a 500 instead of
+            # being recorded as a failed row and letting the rest continue.
+            transaction.set_rollback(False)
+            transaction.savepoint_rollback(decision_savepoint)
             records.append(PromotionRecord(**base_record, status='failed',
                                            error_message=str(exc)))
+        else:
+            transaction.savepoint_commit(decision_savepoint)
 
     PromotionRecord.objects.bulk_create(records, batch_size=200)
 

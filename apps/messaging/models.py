@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from apps.schools.models import School
 from apps.academics.models import Class
@@ -149,3 +150,141 @@ class PersonalNotice(models.Model):
 
     def __str__(self):
         return f"Personal Notice: {self.title} to {self.student.get_full_name()} - {self.school.name}"
+
+
+class SMSConfiguration(models.Model):
+    """The sender identity and switch for one school."""
+
+    STATUS_CHOICES = (
+        ("pending", "Pending approval"),
+        ("approved", "Approved"),
+        ("rejected", "Rejected"),
+        ("disabled", "Disabled"),
+    )
+    school = models.OneToOneField(School, on_delete=models.CASCADE, related_name="sms_configuration")
+    sender_id = models.CharField(max_length=11, blank=True)
+    sender_id_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    rejection_reason = models.TextField(blank=True)
+    is_enabled = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.school.name} SMS ({self.sender_id or 'not configured'})"
+
+
+class SMSBalance(models.Model):
+    """A separately lockable credit balance for each tenant."""
+
+    school = models.OneToOneField(School, on_delete=models.CASCADE, related_name="sms_balance")
+    credits = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.school.name}: {self.credits} SMS credits"
+
+
+class SMSTemplate(models.Model):
+    CATEGORY_CHOICES = (
+        ("attendance", "Attendance"),
+        ("fees", "Fees"),
+        ("results", "Exam results"),
+        ("announcement", "Announcement"),
+        ("meeting", "Meeting"),
+        ("emergency", "Emergency"),
+        ("custom", "Custom"),
+    )
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="sms_templates")
+    name = models.CharField(max_length=120)
+    message = models.TextField()
+    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES, default="custom")
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name="created_sms_templates",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "name"], name="unique_sms_template_name"),
+        ]
+
+
+class SMSJob(models.Model):
+    STATUS_CHOICES = (
+        ("queued", "Queued"),
+        ("processing", "Processing"),
+        ("completed", "Completed"),
+        ("partially_failed", "Partially failed"),
+        ("failed", "Failed"),
+    )
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="sms_jobs")
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name="sms_jobs_requested",
+    )
+    idempotency_key = models.CharField(max_length=128, blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued")
+    recipient_count = models.PositiveIntegerField(default=0)
+    credits_reserved = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "idempotency_key"],
+                name="unique_sms_job_idempotency",
+            ),
+        ]
+
+
+class SMSMessage(models.Model):
+    STATUS_CHOICES = (
+        ("queued", "Queued"),
+        ("sent", "Sent"),
+        ("delivered", "Delivered"),
+        ("failed", "Failed"),
+    )
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="sms_messages")
+    job = models.ForeignKey(SMSJob, on_delete=models.CASCADE, null=True, blank=True, related_name="messages")
+    sender_id = models.CharField(max_length=11)
+    recipient = models.CharField(max_length=30)
+    message = models.TextField()
+    category = models.CharField(max_length=30, blank=True, default="custom")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="queued")
+    provider_message_id = models.CharField(max_length=255, blank=True)
+    provider_response = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    message_parts = models.PositiveIntegerField(default=1)
+    credits_used = models.PositiveIntegerField(default=1)
+    sent_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        related_name="sms_messages_sent",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["school", "-created_at"]),
+            models.Index(fields=["school", "status"]),
+            models.Index(fields=["provider_message_id"]),
+        ]
+
+
+class SMSCreditLedger(models.Model):
+    """Auditable balance changes, including reservations and refunds."""
+
+    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="sms_credit_ledger")
+    amount = models.IntegerField()
+    balance_after = models.PositiveIntegerField()
+    reason = models.CharField(max_length=40)
+    job = models.ForeignKey(SMSJob, on_delete=models.SET_NULL, null=True, blank=True, related_name="credit_entries")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)

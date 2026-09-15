@@ -34,11 +34,12 @@ class UserSerializer(serializers.ModelSerializer):
     school_name = serializers.CharField(source='school.name', read_only=True, allow_null=True)
     school_logo = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
+    platform_permissions = serializers.SerializerMethodField()
     profile_picture = serializers.SerializerMethodField()
     
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'username', 'phone', 'role', 'school', 'school_id', 'school_name', 'school_logo', 'is_active_user', 'created_at', 'permissions', 'profile_picture']
+        fields = ['id', 'email', 'first_name', 'last_name', 'username', 'phone', 'role', 'school', 'school_id', 'school_name', 'school_logo', 'is_active_user', 'created_at', 'permissions', 'platform_permissions', 'profile_picture']
         read_only_fields = ['id', 'created_at', 'school_id']
     
     def get_permissions(self, obj):
@@ -46,6 +47,13 @@ class UserSerializer(serializers.ModelSerializer):
             return obj.role_permission.permission if hasattr(obj, 'role_permission') and obj.role_permission else []
         except:
             return []
+
+    def get_platform_permissions(self, obj):
+        return sorted({
+            permission
+            for assignment in obj.platform_roles.all()
+            for permission in (assignment.role.permissions or [])
+        })
 
     def get_profile_picture(self, obj):
         try:
@@ -240,13 +248,22 @@ class StudentProfileSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(source='user.phone', read_only=True)
     profile_picture_url = serializers.SerializerMethodField()
     school_logo = serializers.SerializerMethodField()
+    # Academic year the student currently belongs to (assigned on onboarding,
+    # editable by an admin). Written through the viewset, so read-only here.
+    academic_year = serializers.PrimaryKeyRelatedField(read_only=True)
+    academic_year_name = serializers.SerializerMethodField()
+    academic_year_status = serializers.SerializerMethodField()
+    academic_year_is_current = serializers.SerializerMethodField()
+    level_name = serializers.SerializerMethodField()
 
     class Meta:
         model = StudentProfile
         fields = [
             'id', 'user', 'user_id', 'user_data', 'user_email', 'user_name',
             'first_name', 'last_name', 'email', 'username', 'phone',
-            'student_id', 'level', 'department', 'enrollment_date',
+            'student_id', 'level', 'level_name', 'department', 'enrollment_date',
+            'academic_year', 'academic_year_name', 'academic_year_status',
+            'academic_year_is_current',
             'gender', 'father_name', 'mother_name', 'religion',
             'father_occupation', 'address', 'roll_number', 'date_of_birth',
             'profile_picture_url', 'school_logo',
@@ -256,7 +273,21 @@ class StudentProfileSerializer(serializers.ModelSerializer):
             'id', 'enrollment_date', 'created_at', 'student_id', 'user_id',
             'user_email', 'user_name', 'first_name', 'last_name',
             'email', 'username', 'phone', 'user_data',
+            'level_name', 'academic_year_name', 'academic_year_status',
+            'academic_year_is_current',
         ]
+
+    def get_academic_year_name(self, obj):
+        return obj.academic_year.name if obj.academic_year else None
+
+    def get_academic_year_status(self, obj):
+        return obj.academic_year.status if obj.academic_year else None
+
+    def get_academic_year_is_current(self, obj):
+        return bool(obj.academic_year and obj.academic_year.is_current)
+
+    def get_level_name(self, obj):
+        return obj.level.name if obj.level else None
 
     def get_user_data(self, obj):
         if obj.user:

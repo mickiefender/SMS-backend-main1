@@ -13,8 +13,42 @@ from apps.schools.models import School
 from apps.academics.models import Class, StudentClass
 from apps.assignments.models import Assignment
 from apps.messaging.models import Notice, Announcement, PersonalNotice
+from apps.messaging.models import SMSJob, SMSMessage
+from apps.messaging.services.arkesel import ArkeselError, ArkeselProvider
+from apps.messaging.services.sms import provider_message_id, refund_credits
+from django.utils import timezone
 
 User = get_user_model()
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
+def process_sms_job(self, job_id):
+    """Deliver a job in small provider requests and make retries idempotent."""
+    job = SMSJob.objects.select_related("school").get(pk=job_id)
+    if job.status in {"completed", "failed"}:
+        return job.status
+    job.status = "processing"
+    job.save(update_fields=["status"])
+    messages = list(job.messages.filter(status="queued"))
+    provider = ArkeselProvider()
+    failed = 0
+    for sms in messages:
+        try:
+            response = provider.send(sms.sender_id, [sms.recipient], sms.message)
+            sms.status = "sent"
+            sms.provider_response = response
+            sms.provider_message_id = provider_message_id(response)
+            sms.save(update_fields=["status", "provider_response", "provider_message_id"])
+        except ArkeselError as exc:
+            failed += 1
+            sms.status = "failed"
+            sms.error_message = str(exc)
+            sms.save(update_fields=["status", "error_message"])
+            refund_credits(job.school, sms.credits_used, job=job)
+    job.status = "failed" if failed == len(messages) else ("partially_failed" if failed else "completed")
+    job.completed_at = timezone.now()
+    job.save(update_fields=["status", "completed_at"])
+    return job.status
 
 # Import Resend
 try:

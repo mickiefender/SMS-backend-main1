@@ -144,6 +144,29 @@ class SupportTicketComment(models.Model):
         ordering = ['created_at']
 
 
+class ContactInquiry(models.Model):
+    STATUS_CHOICES = (
+        ('new', 'New'),
+        ('read', 'Read'),
+        ('replied', 'Replied'),
+        ('archived', 'Archived'),
+    )
+
+    name = models.CharField(max_length=150)
+    email = models.EmailField()
+    school = models.CharField(max_length=255, blank=True, default='')
+    phone = models.CharField(max_length=50, blank=True, default='')
+    inquiry_type = models.CharField(max_length=50, default='sales')
+    message = models.TextField(blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='new')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'contact_inquiry'
+        ordering = ['-created_at']
+
+
 class FeatureFlag(models.Model):
     SCOPE_CHOICES = (('global', 'Global'), ('school', 'School'), ('plan', 'Plan'))
 

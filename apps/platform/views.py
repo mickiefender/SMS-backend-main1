@@ -6,14 +6,17 @@ matching platform-role permission). Sensitive actions write AuditLog rows.
 """
 import hashlib
 import secrets
+import os
 from datetime import timedelta
 
+from django.core.files.storage import default_storage
+from django.db import transaction
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -23,7 +26,7 @@ from apps.platform.models import (
     ImpersonationSession, Invoice, ModerationReport, MonitoringSnapshot,
     NotificationCampaign, PlatformRole, PlatformUserRole, Refund,
     SecurityEvent, StorageQuota, SupportTicket, SupportTicketComment,
-    SystemSetting, UserSession, Webhook, write_audit_log,
+    SystemSetting, UserSession, Webhook, ContactInquiry, write_audit_log,
 )
 
 User = get_user_model()
@@ -37,7 +40,22 @@ class IsSuperAdmin(IsAuthenticated):
     def has_permission(self, request, view):
         if not super().has_permission(request, view):
             return False
-        return request.user.is_authenticated and request.user.role == 'super_admin'
+        return request.user.is_authenticated and (
+            request.user.role == 'super_admin' or (
+                request.user.role == 'platform_staff' and
+                request.user.platform_roles.filter(role__is_system=False).exists()
+            )
+        )
+
+
+class IsPlatformAdmin(IsAuthenticated):
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+        user = request.user
+        return user.role == 'super_admin' or (
+            user.role == 'platform_staff' and user.platform_roles.filter(role__is_system=False).exists()
+        )
 
 
 def _client_meta(request):
@@ -89,6 +107,14 @@ class TicketCommentSerializer(serializers.ModelSerializer):
         fields = ['id', 'ticket', 'author', 'author_name', 'body',
                   'is_internal', 'created_at']
         read_only_fields = ['author', 'author_name', 'created_at']
+
+
+class ContactInquirySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactInquiry
+        fields = ['id', 'name', 'email', 'school', 'phone', 'inquiry_type',
+                  'message', 'status', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
 
 
 class FeatureFlagSerializer(serializers.ModelSerializer):
@@ -302,6 +328,77 @@ class PlatformRoleViewSet(viewsets.ModelViewSet):
         return Response(data)
 
 
+class PlatformStaffView(APIView):
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        staff = User.objects.filter(role='platform_staff').prefetch_related('platform_roles__role', 'school')
+        return Response([self.serialize(member) for member in staff])
+
+    def post(self, request):
+        required = ('first_name', 'last_name', 'username', 'email', 'password', 'platform_role')
+        missing = [field for field in required if not str(request.data.get(field, '')).strip()]
+        if missing:
+            return Response({'detail': f"Missing required fields: {', '.join(missing)}."}, status=status.HTTP_400_BAD_REQUEST)
+
+        role = PlatformRole.objects.filter(id=request.data.get('platform_role')).first()
+        if not role:
+            return Response({'detail': 'Select a valid platform role.'}, status=status.HTTP_400_BAD_REQUEST)
+        if User.objects.filter(username=request.data['username']).exists():
+            return Response({'detail': 'That username is already in use.'}, status=status.HTTP_400_BAD_REQUEST)
+        if User.objects.filter(email=request.data['email']).exists():
+            return Response({'detail': 'That email is already in use.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        member = User.objects.create_user(
+            username=str(request.data['username']).strip(),
+            email=str(request.data['email']).strip(),
+            password=request.data['password'],
+            first_name=str(request.data.get('first_name', '')).strip(),
+            last_name=str(request.data.get('last_name', '')).strip(),
+            phone=str(request.data.get('phone', '')).strip(),
+            role='platform_staff',
+            school=None,
+        )
+        PlatformUserRole.objects.create(user=member, role=role, assigned_by=request.user)
+        write_audit_log(request, request.user, 'platform_staff.created', 'user', member.id, member.get_full_name(), {'role': role.name})
+        return Response(self.serialize(member), status=status.HTTP_201_CREATED)
+
+    def patch(self, request, staff_id):
+        member = User.objects.filter(id=staff_id, role='platform_staff').first()
+        role = PlatformRole.objects.filter(id=request.data.get('platform_role')).first()
+        if not member or not role:
+            return Response({'detail': 'Platform staff account or role not found.'}, status=status.HTTP_404_NOT_FOUND)
+        PlatformUserRole.objects.filter(user=member).delete()
+        PlatformUserRole.objects.create(user=member, role=role, assigned_by=request.user)
+        write_audit_log(request, request.user, 'platform_staff.role_updated', 'user', member.id, member.get_full_name(), {'role': role.name})
+        return Response(self.serialize(member))
+
+    def delete(self, request, staff_id):
+        member = User.objects.filter(id=staff_id, role='platform_staff').first()
+        if not member:
+            return Response({'detail': 'Platform staff account not found.'}, status=status.HTTP_404_NOT_FOUND)
+        label = member.get_full_name() or member.username
+        member.delete()
+        write_audit_log(request, request.user, 'platform_staff.deleted', 'user', staff_id, label)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @staticmethod
+    def serialize(member):
+        assignments = list(member.platform_roles.select_related('role').all())
+        return {
+            'id': member.id,
+            'username': member.username,
+            'email': member.email,
+            'first_name': member.first_name,
+            'last_name': member.last_name,
+            'phone': member.phone,
+            'role': member.role,
+            'platform_roles': [{'id': assignment.role.id, 'name': assignment.role.name, 'display_name': assignment.role.display_name} for assignment in assignments],
+            'platform_permissions': sorted({permission for assignment in assignments for permission in (assignment.role.permissions or [])}),
+            'created_at': member.created_at,
+        }
+
+
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = AuditLogSerializer
     permission_classes = [IsSuperAdmin]
@@ -408,6 +505,260 @@ class SystemSettingViewSet(viewsets.ModelViewSet):
         setting = serializer.save(updated_by=self.request.user)
         write_audit_log(self.request, self.request.user, 'settings.updated',
                         'system_setting', setting.id, setting.key)
+
+
+class PublicTrustedSchoolsView(APIView):
+    """Return the homepage partner logos without exposing platform settings."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        setting = SystemSetting.objects.filter(key='homepage.trusted_schools').first()
+        schools = setting.value if setting and isinstance(setting.value, list) else []
+        return Response({'schools': schools})
+
+
+class PublicFaqsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        setting = SystemSetting.objects.filter(key='homepage.faqs').first()
+        faqs = setting.value if setting and isinstance(setting.value, list) else []
+        return Response({'faqs': faqs})
+
+
+class PublicBlogPostsView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        setting = SystemSetting.objects.filter(key='homepage.blog_posts').first()
+        posts = setting.value if setting and isinstance(setting.value, list) else []
+        return Response({'posts': posts})
+
+
+class BlogPostView(APIView):
+    permission_classes = [IsSuperAdmin]
+
+    setting_key = 'homepage.blog_posts'
+
+    def get_setting(self):
+        setting, _ = SystemSetting.objects.get_or_create(
+            key=self.setting_key,
+            defaults={
+                'category': 'content',
+                'description': 'Blog posts displayed on the public website',
+                'value': [],
+            },
+        )
+        return setting
+
+    def get(self, request):
+        setting = self.get_setting()
+        return Response(setting.value if isinstance(setting.value, list) else [])
+
+    def post(self, request):
+        title = str(request.data.get('title', '')).strip()
+        excerpt = str(request.data.get('excerpt', '')).strip()
+        content = str(request.data.get('content', '')).strip()
+        category = str(request.data.get('category', '')).strip()
+        author = str(request.data.get('author', '')).strip() or 'Alara Team'
+        date = str(request.data.get('date', '')).strip() or timezone.now().strftime('%d %b, %Y')
+        read_time = str(request.data.get('read_time', '')).strip() or '5 min read'
+        tags_raw = str(request.data.get('tags', '')).strip()
+        upload = request.FILES.get('image')
+
+        if not title or not excerpt or not content or not category:
+            return Response(
+                {'detail': 'Title, excerpt, content, and category are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if upload and upload.size > 8 * 1024 * 1024:
+            return Response({'detail': 'Blog images must be 8 MB or smaller.'}, status=status.HTTP_400_BAD_REQUEST)
+        if upload and upload.content_type not in {'image/jpeg', 'image/png', 'image/webp'}:
+            return Response({'detail': 'Only JPEG, PNG, and WebP blog images are supported.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        image_url = ''
+        storage_path = ''
+        if upload:
+            extension = os.path.splitext(upload.name)[1].lower()
+            storage_path = default_storage.save(f'blog/{secrets.token_hex(16)}{extension}', upload)
+            image_url = default_storage.url(storage_path)
+
+        tags = [tag.strip() for tag in tags_raw.split(',') if tag.strip()]
+        post = {
+            'id': secrets.randbelow(2_000_000_000),
+            'title': title,
+            'excerpt': excerpt,
+            'content': content,
+            'category': category,
+            'author': author,
+            'date': date,
+            'readTime': read_time,
+            'tags': tags,
+            'image': image_url,
+            'featured': str(request.data.get('featured', '')).lower() in {'1', 'true', 'on'},
+        }
+
+        setting = self.get_setting()
+        posts = setting.value if isinstance(setting.value, list) else []
+        setting.value = [post, *posts]
+        setting.updated_by = request.user
+        setting.save(update_fields=['value', 'updated_by', 'updated_at'])
+        write_audit_log(request, request.user, 'blog_post.created', 'homepage_setting', setting.id, title)
+        return Response(post, status=status.HTTP_201_CREATED)
+
+    def delete(self, request, post_id):
+        setting = self.get_setting()
+        posts = setting.value if isinstance(setting.value, list) else []
+        post = next((item for item in posts if str(item.get('id')) == str(post_id)), None)
+        if not post:
+            return Response({'detail': 'Blog post not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        image_url = str(post.get('image', ''))
+        bucket_marker = '/storage/v1/object/public/'
+        if bucket_marker in image_url:
+            storage_path = image_url.split(bucket_marker, 1)[1].split('/', 1)[1]
+            default_storage.delete(storage_path)
+
+        setting.value = [item for item in posts if str(item.get('id')) != str(post_id)]
+        setting.updated_by = request.user
+        setting.save(update_fields=['value', 'updated_by', 'updated_at'])
+        write_audit_log(request, request.user, 'blog_post.deleted', 'homepage_setting', setting.id, post.get('title', ''))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class FaqView(APIView):
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        setting = SystemSetting.objects.filter(key='homepage.faqs').first()
+        faqs = setting.value if setting and isinstance(setting.value, list) else []
+        return Response(faqs)
+
+    def post(self, request):
+        question = str(request.data.get('question', '')).strip()
+        answer = str(request.data.get('answer', '')).strip()
+        if not question or not answer:
+            return Response({'detail': 'Question and answer are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        setting, _ = SystemSetting.objects.get_or_create(
+            key='homepage.faqs',
+            defaults={
+                'category': 'general',
+                'description': 'Frequently asked questions displayed on the homepage',
+                'value': [],
+            },
+        )
+        faqs = setting.value if isinstance(setting.value, list) else []
+        faq = {'id': secrets.randbelow(2_000_000_000), 'question': question, 'answer': answer}
+        setting.value = [*faqs, faq]
+        setting.updated_by = request.user
+        setting.save(update_fields=['value', 'updated_by', 'updated_at'])
+        write_audit_log(request, request.user, 'faq.created', 'homepage_setting', setting.id, question)
+        return Response(faq, status=status.HTTP_201_CREATED)
+
+    def delete(self, request, faq_id):
+        setting = SystemSetting.objects.filter(key='homepage.faqs').first()
+        if not setting or not isinstance(setting.value, list):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        faqs = [faq for faq in setting.value if str(faq.get('id')) != str(faq_id)]
+        if len(faqs) == len(setting.value):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        setting.value = faqs
+        setting.updated_by = request.user
+        setting.save(update_fields=['value', 'updated_by', 'updated_at'])
+        write_audit_log(request, request.user, 'faq.deleted', 'homepage_setting', setting.id, str(faq_id))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ContactInquiryView(APIView):
+    def get_permissions(self):
+        return [AllowAny()] if self.request.method == 'POST' else [IsSuperAdmin()]
+
+    def get(self, request):
+        inquiries = ContactInquiry.objects.all()
+        return Response(ContactInquirySerializer(inquiries, many=True).data)
+
+    def post(self, request):
+        serializer = ContactInquirySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        inquiry = serializer.save()
+        return Response(ContactInquirySerializer(inquiry).data, status=status.HTTP_201_CREATED)
+
+    def patch(self, request, inquiry_id):
+        inquiry = ContactInquiry.objects.filter(id=inquiry_id).first()
+        if not inquiry:
+            return Response({'detail': 'Inquiry not found.'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = ContactInquirySerializer(inquiry, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class TrustedSchoolLogoUploadView(APIView):
+    """Upload a trusted-school logo and append it to the homepage setting."""
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request):
+        name = str(request.data.get('name', '')).strip()
+        upload = request.FILES.get('logo')
+
+        if not name:
+            return Response({'detail': 'School name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not upload:
+            return Response({'detail': 'A logo file is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if upload.size > 5 * 1024 * 1024:
+            return Response({'detail': 'Logo files must be 5 MB or smaller.'}, status=status.HTTP_400_BAD_REQUEST)
+        if upload.content_type not in {'image/jpeg', 'image/png', 'image/webp', 'image/svg+xml'}:
+            return Response({'detail': 'Only JPEG, PNG, WebP, and SVG logos are supported.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        extension = os.path.splitext(upload.name)[1].lower()
+        storage_path = default_storage.save(f'trusted-schools/{secrets.token_hex(16)}{extension}', upload)
+        logo_url = default_storage.url(storage_path)
+
+        with transaction.atomic():
+            setting, _ = SystemSetting.objects.get_or_create(
+                key='homepage.trusted_schools',
+                defaults={
+                    'category': 'branding',
+                    'description': 'School logos displayed in the homepage trusted schools section',
+                    'value': [],
+                },
+            )
+            schools = setting.value if isinstance(setting.value, list) else []
+            partner = {'id': secrets.randbelow(2_000_000_000), 'name': name, 'logo': logo_url}
+            setting.value = [*schools, partner]
+            setting.updated_by = request.user
+            setting.save(update_fields=['value', 'updated_by', 'updated_at'])
+
+        write_audit_log(request, request.user, 'trusted_school.created',
+                        'homepage_setting', setting.id, name, {'logo': logo_url})
+        return Response(partner, status=status.HTTP_201_CREATED)
+
+
+class TrustedSchoolLogoDeleteView(APIView):
+    permission_classes = [IsSuperAdmin]
+
+    def delete(self, request, partner_id):
+        setting = SystemSetting.objects.filter(key='homepage.trusted_schools').first()
+        if not setting or not isinstance(setting.value, list):
+            return Response({'detail': 'Trusted school not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        partner = next((item for item in setting.value if str(item.get('id')) == str(partner_id)), None)
+        if not partner:
+            return Response({'detail': 'Trusted school not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        logo_url = str(partner.get('logo', ''))
+        bucket_marker = '/storage/v1/object/public/'
+        if bucket_marker in logo_url:
+            storage_path = logo_url.split(bucket_marker, 1)[1].split('/', 1)[1]
+            default_storage.delete(storage_path)
+
+        setting.value = [item for item in setting.value if str(item.get('id')) != str(partner_id)]
+        setting.updated_by = request.user
+        setting.save(update_fields=['value', 'updated_by', 'updated_at'])
+        write_audit_log(request, request.user, 'trusted_school.deleted',
+                        'homepage_setting', setting.id, partner.get('name', ''), {'logo': logo_url})
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CampaignViewSet(viewsets.ModelViewSet):

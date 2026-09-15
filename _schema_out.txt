@@ -1,0 +1,57 @@
+[
+ [
+  "id",
+  "NO",
+  "bigint"
+ ],
+ [
+  "school_id",
+  "NO",
+  "bigint"
+ ],
+ [
+  "student_id",
+  "NO",
+  "bigint"
+ ],
+ [
+  "academic_year_id",
+  "NO",
+  "bigint"
+ ],
+ [
+  "class_id",
+  "NO",
+  "bigint"
+ ],
+ [
+  "status",
+  "NO",
+  "character varying"
+ ],
+ [
+  "promoted_from_id",
+  "YES",
+  "bigint"
+ ],
+ [
+  "notes",
+  "NO",
+  "text"
+ ],
+ [
+  "created_at",
+  "NO",
+  "timestamp with time zone"
+ ],
+ [
+  "updated_at",
+  "NO",
+  "timestamp with time zone"
+ ],
+ [
+  "class_obj_id",
+  "YES",
+  "bigint"
+ ]
+]
