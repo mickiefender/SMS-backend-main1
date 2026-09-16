@@ -10,7 +10,7 @@ import os
 from datetime import timedelta
 
 from django.core.files.storage import default_storage
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -40,12 +40,18 @@ class IsSuperAdmin(IsAuthenticated):
     def has_permission(self, request, view):
         if not super().has_permission(request, view):
             return False
-        return request.user.is_authenticated and (
-            request.user.role == 'super_admin' or (
-                request.user.role == 'platform_staff' and
-                request.user.platform_roles.filter(role__is_system=False).exists()
-            )
-        )
+        user = request.user
+        if user.role == 'super_admin':
+            return True
+        if user.role != 'platform_staff':
+            return False
+
+        required = PLATFORM_VIEW_PERMISSIONS.get(view.__class__.__name__)
+        if required is None:
+            return user.platform_roles.filter(role__is_system=False).exists()
+        from core.permissions import user_has_platform_permission
+        required_codes = required if isinstance(required, tuple) else (required,)
+        return user_has_platform_permission(user, *required_codes)
 
 
 class IsPlatformAdmin(IsAuthenticated):
@@ -56,6 +62,35 @@ class IsPlatformAdmin(IsAuthenticated):
         return user.role == 'super_admin' or (
             user.role == 'platform_staff' and user.platform_roles.filter(role__is_system=False).exists()
         )
+
+
+PLATFORM_VIEW_PERMISSIONS = {
+    'PlatformRoleViewSet': 'platform.roles',
+    'PlatformStaffView': 'platform.staff',
+    'AuditLogViewSet': ('platform.audit', 'audit.view'),
+    'FeatureFlagViewSet': 'platform.flags',
+    'SystemSettingViewSet': 'platform.settings',
+    'CampaignViewSet': 'platform.notifications',
+    'ApiKeyViewSet': 'platform.apikeys',
+    'WebhookViewSet': 'platform.apikeys',
+    'SecurityEventViewSet': 'platform.security',
+    'UserSessionViewSet': 'platform.security',
+    'ModerationReportViewSet': 'content.moderate',
+    'ContactInquiryView': 'content.contact',
+    'FaqView': 'content.manage',
+    'BlogPostView': 'content.manage',
+    'TrustedSchoolLogoUploadView': 'content.manage',
+    'TrustedSchoolLogoDeleteView': 'content.manage',
+    'SupportTicketViewSet': 'platform.support',
+    'StorageQuotaViewSet': 'platform.storage',
+    'MonitoringSnapshotViewSet': 'platform.monitoring',
+    'SystemHealthView': 'platform.monitoring',
+    'ImpersonationView': 'platform.staff',
+    'CouponViewSet': 'finance.view',
+    'InvoiceViewSet': 'finance.view',
+    'RefundViewSet': 'finance.view',
+    'PlatformOverviewView': 'platform.analytics',
+}
 
 
 def _client_meta(request):
@@ -378,8 +413,15 @@ class PlatformStaffView(APIView):
         if not member:
             return Response({'detail': 'Platform staff account not found.'}, status=status.HTTP_404_NOT_FOUND)
         label = member.get_full_name() or member.username
-        member.delete()
-        write_audit_log(request, request.user, 'platform_staff.deleted', 'user', staff_id, label)
+        # Delete directly so Django's collector does not inspect missing legacy
+        # tables (for example payments_invoice) before PostgreSQL handles FKs.
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    'DELETE FROM users_user WHERE id = %s AND role = %s',
+                    [staff_id, 'platform_staff'],
+                )
+            write_audit_log(request, request.user, 'platform_staff.deleted', 'user', staff_id, label)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @staticmethod

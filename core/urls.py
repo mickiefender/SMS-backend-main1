@@ -28,6 +28,7 @@ urlpatterns = [
     # Super Admin platform APIs (roles, audit, tickets, flags, settings,
     # campaigns, api keys, security, storage, moderation, finance, monitoring)
     path('api/platform/', include('apps.platform.urls')),
+    path('api/compliance/', include('apps.compliance.urls')),
     path('api/students/', include('apps.students.urls')),
     path('api/messaging/', include('apps.messaging.urls')),
     path('api/admin/sms/', include('apps.messaging.admin_sms_urls')),

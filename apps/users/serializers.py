@@ -32,6 +32,8 @@ def generate_unique_username(school, first_name, last_name):
 class UserSerializer(serializers.ModelSerializer):
     school_id = serializers.IntegerField(source='school.id', read_only=True, allow_null=True)
     school_name = serializers.CharField(source='school.name', read_only=True, allow_null=True)
+    school_status = serializers.SerializerMethodField()
+    compliance_status = serializers.SerializerMethodField()
     school_logo = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
     platform_permissions = serializers.SerializerMethodField()
@@ -39,8 +41,14 @@ class UserSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'username', 'phone', 'role', 'school', 'school_id', 'school_name', 'school_logo', 'is_active_user', 'created_at', 'permissions', 'platform_permissions', 'profile_picture']
+        fields = ['id', 'email', 'first_name', 'last_name', 'username', 'phone', 'role', 'school', 'school_id', 'school_name', 'school_status', 'compliance_status', 'school_logo', 'is_active_user', 'created_at', 'permissions', 'platform_permissions', 'profile_picture']
         read_only_fields = ['id', 'created_at', 'school_id']
+
+    def get_school_status(self, obj):
+        return getattr(obj.school, 'status', None) if obj.school else None
+
+    def get_compliance_status(self, obj):
+        return getattr(obj.school, 'compliance_status', None) if obj.school else None
     
     def get_permissions(self, obj):
         try:

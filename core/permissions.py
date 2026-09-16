@@ -71,6 +71,49 @@ def user_has_permission(user, *codes):
     return any(role_permission.has_permission(code) for code in codes)
 
 
+def user_has_platform_permission(user, *codes):
+    """Check permissions assigned through the Super Admin platform RBAC roles."""
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'role', None) == 'super_admin':
+        return True
+    if getattr(user, 'role', None) != 'platform_staff':
+        return False
+    granted = {
+        permission
+        for assignment in user.platform_roles.all()
+        for permission in (assignment.role.permissions or [])
+    }
+    aliases = {
+        "platform.audit": {"platform.audit", "audit.view"},
+        "platform.analytics": {"platform.analytics", "analytics.view"},
+        "platform.support": {"platform.support", "support.manage"},
+        "platform.security": {"platform.security", "security.manage"},
+        "platform.flags": {"platform.flags", "flags.manage"},
+        "platform.settings": {"platform.settings", "settings.manage"},
+        "platform.apikeys": {"platform.apikeys", "integrations.manage"},
+        "platform.monitoring": {"platform.monitoring", "monitoring.view"},
+        "finance.view": {"finance.view", "payments.manage", "subscriptions.manage"},
+        "content.moderate": {"content.moderate", "moderation.manage"},
+        "schools.view": {"schools.view", "schools.manage"},
+        "users.view": {"users.view", "users.manage"},
+    }
+    return "*" in granted or any(
+        granted.intersection(aliases.get(code, {code}))
+        for code in codes
+    )
+
+
+def make_platform_permission_class(*codes):
+    class HasPlatformPermission(permissions.BasePermission):
+        message = "You do not have permission to perform this action."
+
+        def has_permission(self, request, view):
+            return user_has_platform_permission(request.user, *codes)
+
+    return HasPlatformPermission
+
+
 def make_permission_class(*codes):
     """Build a DRF permission class guarding an action behind permission codes."""
     class HasAnyPermission(permissions.BasePermission):

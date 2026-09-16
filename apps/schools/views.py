@@ -4,11 +4,16 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.db.models import Count, Sum, Q
+from django.db import connection, transaction
 from django.utils import timezone
 from datetime import timedelta
-from core.permissions import IsSuperAdmin, IsSchoolAdminOrHigher, CanManageSchoolProfile, CanSendMessages
+from core.permissions import (
+    IsSuperAdmin, IsSchoolAdminOrHigher, CanManageSchoolProfile, CanSendMessages,
+    make_platform_permission_class,
+)
 from core.cache import DashboardCache, CACHE_KEYS, CACHE_TTL, cache
 from apps.schools.models import School, Plan, Subscription, Announcement
+from apps.schools.signals import _invalidate_school_lookup_cache
 from apps.schools.serializers import SchoolSerializer, PlanSerializer, SubscriptionSerializer, AnnouncementSerializer
 from apps.users.models import User
 
@@ -44,6 +49,35 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if hasattr(self.request.user, 'school') and self.request.user.school:
             return School.objects.select_related('plan', 'subscription__plan').filter(id=self.request.user.school.id)
         return School.objects.none()
+
+    def destroy(self, request, *args, **kwargs):
+        """Delete a school without requiring every legacy model table.
+
+        Django's deletion collector queries every related model before issuing
+        the delete. Older deployments may not have all of those tables yet
+        (for example, ``academics_syllabus``), while PostgreSQL can still
+        enforce the configured FK cascades directly.
+        """
+        school = self.get_object()
+        school_id = school.pk
+
+        with transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    'DELETE FROM "schools_school" WHERE "id" = %s',
+                    [school_id],
+                )
+                deleted = cursor.rowcount
+
+        if not deleted:
+            return Response(
+                {'detail': 'School not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        _invalidate_school_lookup_cache(school_id)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=['get'])
     def subscription_status(self, request):
@@ -127,7 +161,9 @@ class SchoolViewSet(viewsets.ModelViewSet):
         
         return Response({'message': 'Cache invalidated successfully'})
 
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsSuperAdmin])
+    @action(detail=False, methods=['get'], permission_classes=[
+        IsAuthenticated, make_platform_permission_class('platform.analytics'),
+    ])
     def super_admin_usage(self, request):
         """Aggregated usage across all schools.
 
@@ -206,7 +242,9 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
         return Response({'results': data})
 
-    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated, IsSuperAdmin])
+    @action(detail=False, methods=['get'], permission_classes=[
+        IsAuthenticated, make_platform_permission_class('platform.analytics'),
+    ])
     def super_admin_analytics(self, request):
         """Platform-wide analytics.
 

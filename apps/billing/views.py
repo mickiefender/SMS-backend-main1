@@ -8,7 +8,7 @@ from django.utils import timezone
 from datetime import timedelta
 import logging
 from core.permissions import (
-    IsSchoolAdminOrHigher, IsSuperAdmin,
+    IsSchoolAdminOrHigher, IsSuperAdmin, make_platform_permission_class,
     CanManageFees, CanCollectFees, CanManageExpenses,
 )
 from apps.billing.models import Invoice, Payment, Fee, StudentFeeAssignment, ClassFeeAssignment, SchoolFeeAssignment, ManualPayment, OnlinePayment, SchoolExpense
@@ -634,7 +634,9 @@ class SchoolExpenseViewSet(viewsets.ModelViewSet):
 
 
 class SuperAdminBillingViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    permission_classes = [IsAuthenticated, make_platform_permission_class(
+        'finance.view', 'platform.analytics',
+    )]
 
     @action(detail=False, methods=['get'])
     def overview(self, request):

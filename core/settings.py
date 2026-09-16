@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'apps.messaging',
     'apps.feed',
     'apps.notifications',
+    'apps.compliance',
     # Super Admin platform (roles, audit, tickets, flags, settings, ...)
     'apps.platform',
     'apps.ai_chat',

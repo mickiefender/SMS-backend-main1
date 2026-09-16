@@ -21,8 +21,10 @@ class SchoolSerializer(serializers.ModelSerializer):
             'id', 'name', 'email', 'phone', 'address', 'city', 'state',
             'country', 'postal_code', 'logo', 'logo_url', 'website',
             'primary_color', 'secondary_color', 'sidebar_color', 'plan',
-            'status', 'subscription_start', 'subscription_end', 'created_at',
-            'updated_at', 'logo_url_computed', 'subscription_details',
+            'status', 'compliance_status', 'approval_method', 'approved_at',
+            'rejected_at', 'rejection_reason', 'subscription_start',
+            'subscription_end', 'created_at', 'updated_at',
+            'logo_url_computed', 'subscription_details',
         ]
     
     def get_logo_url_computed(self, obj):
