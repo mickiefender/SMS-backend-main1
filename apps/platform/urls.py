@@ -16,6 +16,8 @@ from apps.platform.views import (
     TrustedSchoolLogoDeleteView,
     SystemSettingViewSet, UserSessionViewSet, WebhookViewSet,
 )
+# Imported after the views module above: page_heroes reuses IsSuperAdmin from it.
+from apps.platform.page_heroes import PublicPageHeroesView, PageHeroView
 
 router = DefaultRouter()
 router.register(r'roles', PlatformRoleViewSet, basename='platform-role')
@@ -39,6 +41,9 @@ urlpatterns = [
     path('public/trusted-schools/', PublicTrustedSchoolsView.as_view(), name='public-trusted-schools'),
     path('public/faqs/', PublicFaqsView.as_view(), name='public-faqs'),
     path('public/blog/', PublicBlogPostsView.as_view(), name='public-blog-posts'),
+    path('public/page-heroes/', PublicPageHeroesView.as_view(), name='public-page-heroes'),
+    path('page-heroes/', PageHeroView.as_view(), name='page-heroes'),
+    path('page-heroes/<str:page_key>/', PageHeroView.as_view(), name='page-hero-detail'),
     path('faqs/', FaqView.as_view(), name='faqs'),
     path('faqs/<int:faq_id>/', FaqView.as_view(), name='faq-detail'),
     path('blog/', BlogPostView.as_view(), name='blog-posts'),

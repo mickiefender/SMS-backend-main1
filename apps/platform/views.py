@@ -79,6 +79,7 @@ PLATFORM_VIEW_PERMISSIONS = {
     'ContactInquiryView': 'content.contact',
     'FaqView': 'content.manage',
     'BlogPostView': 'content.manage',
+    'PageHeroView': 'content.manage',
     'TrustedSchoolLogoUploadView': 'content.manage',
     'TrustedSchoolLogoDeleteView': 'content.manage',
     'SupportTicketViewSet': 'platform.support',
