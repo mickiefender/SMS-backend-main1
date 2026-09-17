@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import serializers
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db import models, transaction
-from django.db.models import F, Q, Avg
+from django.db.models import F, Q, Avg, Exists, OuterRef
 from django.utils import timezone
 from core.permissions import (
     IsSchoolAdminOrHigher, IsSchoolAdminOrTeacher, IsSchoolAdminOrSelf,
@@ -321,7 +321,7 @@ class ClassViewSet(viewsets.ModelViewSet):
             
             if is_form_tutor:
                 queryset = ClassSubject.objects.filter(
-                    class_obj_id=class_id
+                    class_obj_id=class_id,
                 ).select_related('subject')
         
         class_subjects = queryset.values('subject_id', subject_name=F('subject__name'), subject_code=F('subject__code'))
@@ -841,6 +841,24 @@ class ClassSubjectViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)
         qs = self.queryset.select_related('class_obj', 'subject', 'teacher')
+        if self.request.user.role == 'teacher':
+            form_tutor_class_ids = ClassTeacher.objects.filter(
+                teacher=self.request.user,
+                is_form_tutor=True,
+            ).values_list('class_obj_id', flat=True)
+            assignment_exists = ClassSubjectTeacher.objects.filter(
+                class_obj_id=OuterRef('class_obj_id'),
+                subject_id=OuterRef('subject_id'),
+                teacher=self.request.user,
+                is_active=True,
+            )
+            qs = qs.filter(
+                Q(class_obj_id__in=form_tutor_class_ids) |
+                Exists(assignment_exists)
+            )
+            if school_id is not None:
+                qs = qs.filter(class_obj__school_id=school_id)
+            return qs
         if school_id is None:
             return qs.all()
         return qs.filter(class_obj__school_id=school_id)
@@ -1170,9 +1188,12 @@ class ClassSubjectTeacherViewSet(viewsets.ModelViewSet):
             ).values_list('class_obj_id', flat=True))
 
             return self.queryset.filter(
-                models.Q(teacher=user) |
+                models.Q(teacher=user, is_active=True) |
                 models.Q(class_obj_id__in=form_tutor_class_ids)
-            )
+            ).filter(
+                **({'class_obj__school_id': get_school_filter(user)}
+                   if get_school_filter(user) is not None else {})
+            ).distinct()
 
         school_id = get_school_filter(user)
         if school_id is None:

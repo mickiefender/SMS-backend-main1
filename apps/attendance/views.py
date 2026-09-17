@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -34,6 +34,10 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         return Attendance.objects.filter(class_obj__school=self.request.user.school)
 
     def perform_create(self, serializer):
+        self._validate_teacher_assignment(
+            serializer.validated_data['class_obj'].id,
+            serializer.validated_data['subject'].id,
+        )
         instance = serializer.save(teacher=self.request.user)
         send_attendance_marked_email.delay([instance.id])
         
@@ -64,6 +68,37 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             )
         except Exception as notify_error:
             logger.error(f"Failed to send attendance notification: {notify_error}")
+
+    def perform_update(self, serializer):
+        class_obj = serializer.validated_data.get('class_obj', serializer.instance.class_obj)
+        subject = serializer.validated_data.get('subject', serializer.instance.subject)
+        self._validate_teacher_assignment(class_obj.id, subject.id)
+        serializer.save()
+
+    def _validate_teacher_assignment(self, class_id, subject_id):
+        if self.request.user.role != 'teacher':
+            return
+
+        from apps.academics.models import ClassSubject, ClassSubjectTeacher
+
+        is_form_tutor = ClassTeacher.objects.filter(
+            teacher=self.request.user,
+            class_obj_id=class_id,
+            is_form_tutor=True,
+        ).exists()
+        is_assigned_subject = ClassSubjectTeacher.objects.filter(
+            teacher=self.request.user,
+            class_obj_id=class_id,
+            subject_id=subject_id,
+            is_active=True,
+        ).exists()
+        if not ClassSubject.objects.filter(
+            class_obj_id=class_id,
+            subject_id=subject_id,
+        ).exists() or not (is_form_tutor or is_assigned_subject):
+            raise serializers.ValidationError(
+                {'detail': 'You are not assigned to this class and subject.'}
+            )
     
     def get_permissions(self):
         if self.action in ['create', 'update', 'partial_update', 'destroy', 'bulk_mark']:
@@ -90,25 +125,29 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         from apps.academics.models import ClassTeacher, ClassSubject
         
         # Classes teacher manages (ClassTeacher)
-        class_ids = set(
+        form_tutor_class_ids = set(
             ClassTeacher.objects.filter(teacher=request.user)
+            .filter(is_form_tutor=True)
             .values_list('class_obj_id', flat=True)
         )
         
         # All subjects in those classes (ClassSubject)
         all_subjects_in_classes = set(
-            ClassSubject.objects.filter(class_obj_id__in=class_ids)
+            ClassSubject.objects.filter(class_obj_id__in=form_tutor_class_ids)
             .values_list('class_obj_id', 'subject_id')
         )
         
         # Specific subject assignments (ClassSubjectTeacher)
         specific_assignments = set(
-            ClassSubjectTeacher.objects.filter(teacher=request.user)
+            ClassSubjectTeacher.objects.filter(
+                teacher=request.user,
+                is_active=True,
+            )
             .values_list('class_obj_id', 'subject_id')
         )
-        
+
         teacher_assignments = all_subjects_in_classes.union(specific_assignments)
-        logger.info(f"Teacher {request.user.id} can mark {len(teacher_assignments)} class-subjects across {len(class_ids)} classes")
+        logger.info(f"Teacher {request.user.id} can mark {len(teacher_assignments)} class-subjects across {len(form_tutor_class_ids)} classes")
 
         # Admin staff (school admins / admin-staff roles) manage attendance
         # school-wide and are not bound by per-teacher assignments.

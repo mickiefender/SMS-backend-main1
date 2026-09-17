@@ -55,6 +55,7 @@ class ClassSerializer(serializers.ModelSerializer):
     level = serializers.PrimaryKeyRelatedField(queryset=Level.objects.all(), required=False, allow_null=True)
     teachers = serializers.SerializerMethodField()
     form_tutor = serializers.SerializerMethodField()
+    subjects = serializers.SerializerMethodField()
     
     class Meta:
         model = Class
@@ -127,6 +128,47 @@ class ClassSerializer(serializers.ModelSerializer):
                 'profile_picture': self._profile_pic_url(teacher),
             }
         return None
+
+    def get_subjects(self, obj):
+        """Return the subjects available for this class.
+
+        Teacher clients receive only their active assignments, except for
+        classes where they are the form tutor, where all class subjects are
+        available. Staff and administrators receive every subject assigned to
+        the class.
+        """
+        class_subjects = getattr(obj, '_class_subjects_for_serializer', None)
+        if class_subjects is None:
+            class_subjects = obj.subjects.select_related('subject', 'teacher').all()
+
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user is not None and getattr(user, 'role', None) == 'teacher':
+            is_form_tutor = obj.teachers.filter(
+                teacher=user,
+                is_form_tutor=True,
+            ).exists()
+            if not is_form_tutor:
+                assigned_subject_ids = set(
+                    obj.subject_teachers.filter(
+                        teacher=user,
+                        is_active=True,
+                    ).values_list('subject_id', flat=True)
+                )
+                class_subjects = [
+                    class_subject for class_subject in class_subjects
+                    if class_subject.subject_id in assigned_subject_ids
+                ]
+
+        return [
+            {
+                'id': class_subject.subject_id,
+                'name': class_subject.subject.name,
+                'code': class_subject.subject.code,
+                'teacher': class_subject.teacher_id,
+            }
+            for class_subject in class_subjects
+        ]
 
 
 class ClassSubjectSerializer(serializers.ModelSerializer):

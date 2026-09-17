@@ -627,16 +627,34 @@ class StudentViewSet(viewsets.ModelViewSet):
                 # Check if teacher is form tutor
                 is_form_tutor = ClassTeacher.objects.filter(
                     teacher=request.user,
-                    class_obj=cls
+                    class_obj=cls,
+                    is_form_tutor=True,
                 ).exists()
 
                 # Get subjects taught by this teacher in this class
                 subjects_taught = ClassSubjectTeacher.objects.filter(
                     teacher=request.user,
-                    class_obj=cls
+                    class_obj=cls,
+                    is_active=True,
                 ).select_related('subject').values(
                     'subject__id', 'subject__name', 'subject__code'
                 )
+                if is_form_tutor:
+                    from apps.academics.models import ClassSubject
+                    subjects_taught = ClassSubject.objects.filter(
+                        class_obj=cls
+                    ).select_related('subject').values(
+                        'subject__id', 'subject__name', 'subject__code'
+                    )
+
+                subjects = [
+                    {
+                        'id': s['subject__id'],
+                        'name': s['subject__name'],
+                        'code': s['subject__code'],
+                    }
+                    for s in subjects_taught
+                ]
 
                 results.append({
                     'id': cls.id,
@@ -645,14 +663,8 @@ class StudentViewSet(viewsets.ModelViewSet):
                     'level': cls.level.name if cls.level else None,
                     'student_count': student_count,
                     'is_form_tutor': is_form_tutor,
-                    'subjects_taught': [
-                        {
-                            'id': s['subject__id'],
-                            'name': s['subject__name'],
-                            'code': s['subject__code']
-                        }
-                        for s in subjects_taught
-                    ]
+                    'subjects': subjects,
+                    'subjects_taught': subjects,
                 })
 
             print(f"[TeacherClasses] Found {len(results)} classes")
