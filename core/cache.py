@@ -11,14 +11,224 @@ Provides caching utilities for:
 import hashlib
 import json
 import logging
+import time
 from functools import wraps
 from typing import Any, Callable, Optional
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.core.cache import cache
+from django.db import transaction
+from rest_framework.response import Response
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+# Dedicated, structured cache event stream (HIT / MISS / SET / INVALIDATION).
+# Configured under settings.LOGGING and gated by settings.CACHE_LOGGING so it
+# can be toggled independently of DEBUG.
+cache_logger = logging.getLogger('cache.events')
+MAX_API_CACHE_PAYLOAD_BYTES = 1_000_000
+
+
+def cache_logging_enabled() -> bool:
+    """Whether structured cache events should be emitted."""
+    return bool(getattr(settings, 'CACHE_LOGGING', getattr(settings, 'DEBUG', False)))
+
+
+def _cache_log(event: str, key: str, level: int = logging.INFO) -> None:
+    if not cache_logging_enabled():
+        return
+    cache_logger.log(level, 'CACHE %s %s', event, key)
+
+
+def _generation_key(namespace: str, school_id: Any = None, user_id: Any = None) -> str:
+    scope = f"school:{school_id}" if school_id is not None else "global"
+    user_scope = f":user:{user_id}" if user_id is not None else ""
+    return f"api-cache:v1:generation:{namespace}:{scope}{user_scope}"
+
+
+def invalidate_cache_namespaces(
+    *namespaces: str,
+    school_id: Any = None,
+    user_id: Any = None,
+) -> None:
+    """Bump Redis-backed generations so old namespace entries expire naturally."""
+    for namespace in set(namespaces):
+        key = _generation_key(namespace, school_id, user_id)
+        try:
+            if not cache.add(key, 1, timeout=86_400):
+                cache.incr(key)
+            _cache_log('INVALIDATION', key, logging.INFO)
+        except Exception:
+            logger.exception('Cache invalidation failed for %s', key)
+
+
+def _cache_scope(request) -> tuple[str, str, str]:
+    user = getattr(request, 'user', None)
+    is_authenticated = bool(user and user.is_authenticated)
+    user_id = getattr(user, 'pk', None) if is_authenticated else 'public'
+    role = getattr(user, 'role', 'public') if is_authenticated else 'public'
+    school_id = getattr(user, 'school_id', None) if is_authenticated else None
+    if school_id is None:
+        school_id = (
+            request.META.get('HTTP_X_SCHOOL_ID')
+            or request.query_params.get('school_id')
+            or 'global'
+        )
+    return str(school_id), str(user_id), str(role)
+
+
+def _cached_response(payload: str) -> Response:
+    cached = json.loads(payload)
+    response = Response(cached['data'], status=cached['status'])
+    for name, value in cached.get('headers', {}).items():
+        response[name] = value
+    return response
+
+
+def cached_api_response(
+    namespace: str,
+    timeout: int,
+    *,
+    tags: tuple[str, ...] = (),
+    public: bool = False,
+) -> Callable:
+    """Cache JSON DRF GET responses with tenant/user scoping and Redis locking."""
+    def decorator(view_func: Callable) -> Callable:
+        @wraps(view_func)
+        def wrapper(*args, **kwargs):
+            request = args[1] if len(args) > 1 and hasattr(args[0], 'request') else args[0]
+            user = getattr(request, 'user', None)
+            is_authenticated = bool(user and user.is_authenticated)
+            if request.method != 'GET' or (not is_authenticated and not public):
+                return view_func(*args, **kwargs)
+
+            school_id, user_id, role = _cache_scope(request)
+            query = urlencode(sorted(request.query_params.lists()), doseq=True)
+            query_hash = hashlib.sha256(query.encode()).hexdigest()[:24]
+            namespaces = tuple(dict.fromkeys((namespace, *tags)))
+            generation_keys = []
+            for tag in namespaces:
+                generation_keys.extend((
+                    _generation_key(tag),
+                    _generation_key(tag, school_id),
+                ))
+                if is_authenticated:
+                    generation_keys.extend((
+                        _generation_key(tag, user_id=user_id),
+                        _generation_key(tag, school_id, user_id),
+                    ))
+            try:
+                generation_values = cache.get_many(generation_keys)
+                generations = [
+                    str(generation_values.get(key, 0))
+                    for key in generation_keys
+                ]
+            except Exception:
+                logger.exception('Cache generation lookup failed for %s', namespace)
+                return view_func(*args, **kwargs)
+
+            key_parts = (
+                'api-cache:v1',
+                namespace,
+                school_id,
+                user_id,
+                role,
+                hashlib.sha256(request.META.get('HTTP_HOST', '').encode()).hexdigest()[:12],
+                hashlib.sha256(request.META.get('HTTP_X_SCHOOL_ID', '').encode()).hexdigest()[:12],
+                ':'.join(generations),
+                query_hash,
+            )
+            cache_key = ':'.join(key_parts)
+
+            try:
+                payload = cache.get(cache_key)
+                if payload is not None:
+                    _cache_log('HIT', cache_key)
+                    return _cached_response(payload)
+            except Exception:
+                logger.exception('Cache read failed for %s', cache_key)
+
+            _cache_log('MISS', cache_key)
+            lock = None
+            acquired = False
+            try:
+                lock = cache.lock(f'{cache_key}:lock', timeout=max(timeout, 10), blocking_timeout=0)
+                acquired = lock.acquire(blocking=False)
+            except Exception:
+                logger.exception('Cache stampede lock unavailable for %s', cache_key)
+
+            if lock is not None and not acquired:
+                deadline = time.monotonic() + 0.25
+                while time.monotonic() < deadline:
+                    time.sleep(0.025)
+                    try:
+                        payload = cache.get(cache_key)
+                        if payload is not None:
+                            _cache_log('HIT_AFTER_WAIT', cache_key)
+                            return _cached_response(payload)
+                    except Exception:
+                        logger.exception('Cache read while waiting failed for %s', cache_key)
+                        break
+
+            try:
+                response = view_func(*args, **kwargs)
+                if not isinstance(response, Response) or response.status_code != 200:
+                    return response
+
+                cache_control = response.get('Cache-Control', '').lower()
+                if (
+                    'Set-Cookie' in response
+                    or 'no-store' in cache_control
+                    or 'no-cache' in cache_control
+                ):
+                    return response
+
+                headers = {
+                    name: value
+                    for name, value in response.items()
+                    if name.lower() not in ('content-type', 'content-length', 'set-cookie')
+                }
+                try:
+                    payload = json.dumps({
+                        'data': response.data,
+                        'status': response.status_code,
+                        'headers': headers,
+                    }, default=str)
+                    if len(payload.encode()) <= MAX_API_CACHE_PAYLOAD_BYTES:
+                        cache.set(cache_key, payload, timeout)
+                        _cache_log('SET', cache_key)
+                    else:
+                        _cache_log('SKIP_LARGE', cache_key)
+                except (TypeError, ValueError):
+                    logger.exception('Response is not cache-serializable for %s', cache_key)
+                except Exception:
+                    logger.exception('Cache write failed for %s', cache_key)
+                return response
+            finally:
+                if acquired and lock is not None:
+                    try:
+                        lock.release()
+                    except Exception:
+                        logger.exception('Cache stampede lock release failed for %s', cache_key)
+        return wrapper
+    return decorator
+
+
+def invalidate_model_cache(
+    *namespaces: str,
+    school_id: Any = None,
+    user_id: Any = None,
+) -> None:
+    """Run cache invalidation only after the model transaction commits."""
+    transaction.on_commit(
+        lambda: invalidate_cache_namespaces(
+            *namespaces,
+            school_id=school_id,
+            user_id=user_id,
+        )
+    )
+
 
 # Cache key prefixes
 CACHE_KEYS = {
@@ -83,6 +293,27 @@ CACHE_TTL = {
     'notice_board': 300,             # 5 minutes
 }
 
+# Topic namespaces used by @cached_api_response. TTLs are chosen by how often
+# each data set changes: fast-moving, user-facing lists are short; reference
+# data and marketing content are longer. Every namespace is invalidated by the
+# model signals in core/cache_signals.py as data is created/updated/deleted.
+CACHE_TTL.update({
+    'homepage': 300,        # public marketing content (blog, faqs, partners)
+    'students': 60,         # rosters change often
+    'teachers': 120,
+    'parents': 120,
+    'schools': 300,
+    'courses': 300,         # subjects / classes / faculties
+    'feed': 60,             # learning feed lists
+    'notifications': 15,    # per-user, must feel live
+    'attendance': 120,
+    'billing': 180,
+    'assignments': 120,
+    'messages': 60,
+    'notices': 300,
+    'calendar': 600,
+})
+
 
 def make_key(*parts: Any) -> str:
     """Build a safe, colon-separated cache key from parts.
@@ -104,25 +335,59 @@ def make_key(*parts: Any) -> str:
 
 
 def get_or_set_json(key: str, default: Callable[[], Any], ttl: Optional[int] = None) -> Any:
-    """Fetch JSON-serializable value from cache, computing with ``default`` on miss.
+    """Cache a JSON-serializable value, computing it once on a miss.
 
     Returns the cached Python object (deserialized from JSON). This keeps the
     cache storage compact and avoids pickling unexpected types.
+
+    A short, non-blocking Redis lock prevents a stampede: when several requests
+    miss at the same instant, only the lock holder recomputes while the others
+    wait briefly and read the value that was just written.
     """
     ttl = ttl if ttl is not None else CACHE_TTL['dashboard_stats']
     try:
         raw = cache.get(key)
         if raw is not None:
+            _cache_log('HIT', key)
             return json.loads(raw)
     except Exception as e:
-        logger.debug(f"Cache get failed for {key}: {e}")
+        logger.debug("Cache get failed for %s: %s", key, e)
 
-    value = default()
+    _cache_log('MISS', key)
+    lock = None
+    acquired = False
     try:
-        cache.set(key, json.dumps(value, default=str), ttl)
-    except Exception as e:
-        logger.debug(f"Cache set failed for {key}: {e}")
-    return value
+        lock = cache.lock(f'{key}:lock', timeout=max(ttl, 10), blocking_timeout=0)
+        acquired = lock.acquire(blocking=False)
+    except Exception:
+        lock = None
+
+    if lock is not None and not acquired:
+        deadline = time.monotonic() + 0.25
+        while time.monotonic() < deadline:
+            time.sleep(0.025)
+            try:
+                raw = cache.get(key)
+                if raw is not None:
+                    _cache_log('HIT_AFTER_WAIT', key)
+                    return json.loads(raw)
+            except Exception:
+                break
+
+    try:
+        value = default()
+        try:
+            cache.set(key, json.dumps(value, default=str), ttl)
+            _cache_log('SET', key)
+        except Exception as e:
+            logger.debug("Cache set failed for %s: %s", key, e)
+        return value
+    finally:
+        if acquired and lock is not None:
+            try:
+                lock.release()
+            except Exception:
+                logger.debug("Cache lock release failed for %s", key)
 
 
 def invalidate_keys(*keys: str) -> None:
@@ -163,11 +428,25 @@ class DashboardCache:
         ttl = ttl or CACHE_TTL['dashboard_stats']
         try:
             cache.set(key, json.dumps(data, default=str), ttl)
-            logger.debug(f"Cached dashboard stats for school {school_id}")
+            _cache_log('SET', key)
             return True
         except Exception as e:
             logger.error(f"Error caching dashboard stats: {e}")
             return False
+
+    @staticmethod
+    def get_or_compute_stats(school_id: int, compute: Callable[[], dict], ttl: int = None) -> dict:
+        """Return cached dashboard stats, computing them once on a miss.
+
+        Delegates to the stampede-safe ``get_or_set_json`` helper so a burst of
+        concurrent requests cannot all recompute the same expensive aggregates.
+        """
+        ttl = ttl or CACHE_TTL['dashboard_stats']
+        return get_or_set_json(
+            DashboardCache.get_stats_cache_key(school_id),
+            compute,
+            ttl,
+        )
 
     @staticmethod
     def get_stats(school_id: int) -> Optional[dict]:

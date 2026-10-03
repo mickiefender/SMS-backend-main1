@@ -1,14 +1,18 @@
 """
 Feed service: orchestrates feed endpoints, caching, and personalization.
 """
+import logging
 from typing import Optional
 
 from django.core.cache import cache
 from django.db.models import Q, Case, When, Value
 
+from core.cache import invalidate_cache_namespaces
 from apps.feed import models
 from apps.feed.services.recommendation_service import RecommendationService
 from apps.feed.services.lesson_service import LessonService
+
+logger = logging.getLogger(__name__)
 
 
 class FeedService:
@@ -99,11 +103,12 @@ class FeedService:
     @staticmethod
     def invalidate_feed_caches(lesson: Optional[models.FeedLesson] = None):
         """Invalidate public/guest caches when content changes."""
+        invalidate_cache_namespaces('feed')
         try:
             client = cache.client.get_client()
             for key in client.scan_iter(match='feed:guest:*'):
                 client.delete(key)
         except Exception:
-            pass
+            logger.exception('Failed to invalidate legacy guest feed cache')
         if lesson and lesson.teacher_id:
             RecommendationService.invalidate_user_cache(lesson.teacher)

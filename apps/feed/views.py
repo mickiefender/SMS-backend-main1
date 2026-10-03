@@ -12,6 +12,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.cache import CACHE_TTL, cached_api_response
 from apps.feed import models, serializers
 from apps.feed.pagination import (
     CommentCursorPagination, FeedCursorPagination, TrendingCursorPagination,
@@ -55,6 +56,10 @@ class FeedLessonViewSet(viewsets.ModelViewSet):
     pagination_class = FeedCursorPagination
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ['published_at', 'trending_score', 'created_at']
+
+    @cached_api_response('feed', CACHE_TTL['feed'], public=True)
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         return FeedService.visible_lessons(

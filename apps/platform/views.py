@@ -20,6 +20,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.cache import CACHE_TTL, cached_api_response
 from apps.schools.models import Plan, School, Subscription
 from apps.platform.models import (
     AccountLockout, ApiKey, ApiUsageLog, AuditLog, Coupon, FeatureFlag,
@@ -554,6 +555,7 @@ class PublicTrustedSchoolsView(APIView):
     """Return the homepage partner logos without exposing platform settings."""
     permission_classes = [AllowAny]
 
+    @cached_api_response('homepage', CACHE_TTL['homepage'], public=True)
     def get(self, request):
         setting = SystemSetting.objects.filter(key='homepage.trusted_schools').first()
         schools = setting.value if setting and isinstance(setting.value, list) else []
@@ -563,6 +565,7 @@ class PublicTrustedSchoolsView(APIView):
 class PublicFaqsView(APIView):
     permission_classes = [AllowAny]
 
+    @cached_api_response('homepage', CACHE_TTL['homepage'], public=True)
     def get(self, request):
         setting = SystemSetting.objects.filter(key='homepage.faqs').first()
         faqs = setting.value if setting and isinstance(setting.value, list) else []
@@ -572,6 +575,7 @@ class PublicFaqsView(APIView):
 class PublicBlogPostsView(APIView):
     permission_classes = [AllowAny]
 
+    @cached_api_response('homepage', CACHE_TTL['homepage'], public=True)
     def get(self, request):
         setting = SystemSetting.objects.filter(key='homepage.blog_posts').first()
         posts = setting.value if setting and isinstance(setting.value, list) else []

@@ -11,7 +11,10 @@ from core.permissions import (
     IsSuperAdmin, IsSchoolAdminOrHigher, CanManageSchoolProfile, CanSendMessages,
     make_platform_permission_class,
 )
-from core.cache import DashboardCache, CACHE_KEYS, CACHE_TTL, cache
+from core.cache import (
+    DashboardCache, CACHE_KEYS, CACHE_TTL, cache, cached_api_response,
+    invalidate_cache_namespaces,
+)
 from apps.schools.models import School, Plan, Subscription, Announcement
 from apps.schools.signals import _invalidate_school_lookup_cache
 from apps.schools.serializers import SchoolSerializer, PlanSerializer, SubscriptionSerializer, AnnouncementSerializer
@@ -42,6 +45,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if self.action in ['update', 'partial_update']:
             return [CanManageSchoolProfile()]
         return [IsAuthenticated()]
+
+    @cached_api_response('schools', CACHE_TTL['schools'], tags=('homepage',))
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
     
     def get_queryset(self):
         if self.request.user.role == 'super_admin':
@@ -76,6 +83,8 @@ class SchoolViewSet(viewsets.ModelViewSet):
             )
 
         _invalidate_school_lookup_cache(school_id)
+        invalidate_cache_namespaces('schools', 'homepage')
+        invalidate_cache_namespaces('schools', 'homepage', school_id=school_id)
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 

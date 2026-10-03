@@ -103,6 +103,22 @@ Schools are isolated using the `school` foreign key. The middleware automaticall
 2. `school_id` query parameter
 3. User's school (if authenticated)
 
+## Caching
+
+Django uses the configured Redis cache (`REDIS_URL`, defaulting to
+`redis://localhost:6379/1`). Frequently-read response namespaces use short
+TTLs: homepage content (5 minutes), school and course directories (5
+minutes), teachers (2 minutes), students (1 minute), feed (1 minute), and
+notifications (10 seconds). Authenticated response keys include the school,
+user, role, request host, and query parameters; notification keys are also
+user-scoped. Cache generations are bumped after relevant model transactions
+commit, and Redis locks reduce duplicate work on cold response keys.
+
+In development, cache `HIT`, `MISS`, `SET`, and `INVALIDATION` events are
+logged. Authenticated Next.js proxy requests explicitly use `no-store`;
+the browser only retains short-lived anonymous GET responses and coalesces
+identical in-flight requests.
+
 ## Deployment
 
 For production:

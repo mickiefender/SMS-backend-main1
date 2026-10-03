@@ -10,6 +10,7 @@ from django.db import connection, OperationalError, IntegrityError, transaction
 from django.db.models import Count, Q
 from rest_framework.exceptions import ValidationError
 from core.permissions import IsSchoolAdminOrHigher, IsSuperAdmin, CanManageAdminStaff
+from core.cache import CACHE_TTL, cached_api_response
 from apps.users.models import User, TeacherProfile, StudentProfile, RolePermission, ParentStudentRelationship
 from apps.academics.models import (
     StudentClass,
@@ -50,6 +51,12 @@ import time
 
 class UserPagination(PageNumberPagination):
     page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class ProfilePagination(PageNumberPagination):
+    page_size = 20
     page_size_query_param = 'page_size'
     max_page_size = 100
 
@@ -283,6 +290,11 @@ class TeacherViewSet(viewsets.ModelViewSet):
     queryset = TeacherProfile.objects.all()
     serializer_class = TeacherProfileSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = ProfilePagination
+
+    @cached_api_response('teachers', CACHE_TTL['teachers'])
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         ensure_connection()
@@ -407,6 +419,11 @@ class StudentViewSet(viewsets.ModelViewSet):
     queryset = StudentProfile.objects.all()
     serializer_class = StudentProfileSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = ProfilePagination
+
+    @cached_api_response('students', CACHE_TTL['students'])
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         ensure_connection()

@@ -338,6 +338,19 @@ LOGGING = {
             'level': 'WARNING',
             'handlers': ['console'],
         },
+        # Structured cache event stream: HIT / MISS / SET / INVALIDATION.
+        # Toggle with the CACHE_LOGGING env var; defaults on in DEBUG so
+        # developers see cache behaviour without extra setup.
+        'cache.events': {
+            'level': 'INFO',
+            'handlers': ['console'],
+            'propagate': False,
+        },
+        'core.cache': {
+            'level': 'INFO',
+            'handlers': ['console'],
+            'propagate': False,
+        },
     },
 }
 
@@ -367,6 +380,13 @@ CACHES = {
         'TIMEOUT': 300,  # Default timeout: 5 minutes
     }
 }
+
+# Emit structured cache events (HIT / MISS / SET / INVALIDATION / ...) to the
+# 'cache.events' logger. On by default under DEBUG so the cache is observable
+# during development; set CACHE_LOGGING=False in production to silence it.
+CACHE_LOGGING = os.environ.get(
+    'CACHE_LOGGING', 'True' if DEBUG else 'False'
+) == 'True'
 
 # Paystack Configuration
 PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', 'sk_test_xxxxxxxxxxxxxxxxxxxxx')

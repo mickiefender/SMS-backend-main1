@@ -12,7 +12,15 @@ from django.db.models.signals import post_save, post_delete, pre_save
 from django.dispatch import receiver
 from django.conf import settings
 
+from core.cache import invalidate_model_cache
+
 logger = logging.getLogger(__name__)
+
+
+@receiver(post_save, sender='notifications.Notification')
+@receiver(post_delete, sender='notifications.Notification')
+def invalidate_notification_cache(sender, instance, **kwargs):
+    invalidate_model_cache('notifications', user_id=instance.recipient_id)
 
 
 # ─── Feed Signals ────────────────────────────────────────────────────────────

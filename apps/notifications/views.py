@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count
 
+from core.cache import CACHE_TTL, cached_api_response, invalidate_cache_namespaces
 from apps.notifications import models, serializers
 from apps.notifications.services import notification_service
 
@@ -36,6 +37,10 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     """
     permission_classes = [IsAuthenticated]
     pagination_class = NotificationPagination
+
+    @cached_api_response('notifications', CACHE_TTL['notifications'])
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -62,14 +67,17 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):
         count = notification_service.mark_all_as_read(request.user)
+        invalidate_cache_namespaces('notifications', user_id=request.user.pk)
         return Response({'status': 'all marked as read', 'count': count})
 
     @action(detail=False, methods=['get'])
+    @cached_api_response('notifications', CACHE_TTL['notifications'])
     def unread_count(self, request):
         count = notification_service.get_unread_count(request.user)
         return Response({'unread_count': count})
 
     @action(detail=False, methods=['get'])
+    @cached_api_response('notifications', CACHE_TTL['notifications'])
     def unread_summary(self, request):
         summary = models.Notification.objects.filter(
             recipient=request.user, is_read=False

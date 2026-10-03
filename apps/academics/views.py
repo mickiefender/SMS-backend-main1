@@ -17,6 +17,7 @@ from core.permissions import (
     CanManageAssessmentTypes, CanManageExamsOrTeach, CanManageGradesOrTeach,
     CanManageAssessmentsOrTeach,
 )
+from core.cache import CACHE_TTL, cached_api_response
 from apps.academics.models import (
     Faculty, Department, Level, Subject, Class,
     ClassSubject, Enrollment, Timetable, AcademicCalendarEvent,
@@ -171,6 +172,10 @@ class SubjectViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanManageSubjects()]
         return [IsAuthenticated()]
 
+    @cached_api_response('courses', CACHE_TTL['courses'])
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)
         if school_id is None:
@@ -194,6 +199,10 @@ class ClassViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsAuthenticated(), CanManageClasses()]
         return [IsAuthenticated()]
+
+    @cached_api_response('courses', CACHE_TTL['courses'], tags=('students', 'teachers'))
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)
@@ -231,6 +240,7 @@ class ClassViewSet(viewsets.ModelViewSet):
             serializer.save()
 
     @action(detail=False, methods=['get'])
+    @cached_api_response('courses', CACHE_TTL['dashboard_stats'], tags=('students',))
     def performance(self, request):
         """Get class performance analytics with grades and attendance"""
         from django.db.models import Avg, Count
@@ -334,6 +344,7 @@ class ClassViewSet(viewsets.ModelViewSet):
         })
 
     @action(detail=False, methods=['get'], url_path='teacher-dashboard', permission_classes=[IsAuthenticated, IsSchoolAdminOrTeacher])
+    @cached_api_response('teachers', CACHE_TTL['teacher_dashboard'], tags=('students', 'courses'))
     def teacher_dashboard(self, request):
         """Teacher dashboard data: assigned classes, subject assignments, summary, attendance and student gender distribution."""
         from apps.academics.models import ClassTeacher, ClassSubjectTeacher, StudentClass
