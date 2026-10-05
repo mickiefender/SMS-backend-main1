@@ -53,14 +53,21 @@ def invalidate_cache_namespaces(
     user_id: Any = None,
 ) -> None:
     """Bump Redis-backed generations so old namespace entries expire naturally."""
+    scopes = {(school_id, user_id)}
+    # Tenant writes also affect platform-wide (Super Admin) lists, but should
+    # not invalidate cached reads belonging to other tenant scopes.
+    if school_id is not None and user_id is None:
+        scopes.add((None, None))
+
     for namespace in set(namespaces):
-        key = _generation_key(namespace, school_id, user_id)
-        try:
-            if not cache.add(key, 1, timeout=86_400):
-                cache.incr(key)
-            _cache_log('INVALIDATION', key, logging.INFO)
-        except Exception:
-            logger.exception('Cache invalidation failed for %s', key)
+        for scope_school_id, scope_user_id in scopes:
+            key = _generation_key(namespace, scope_school_id, scope_user_id)
+            try:
+                if not cache.add(key, 1, timeout=86_400):
+                    cache.incr(key)
+                _cache_log('INVALIDATION', key, logging.INFO)
+            except Exception:
+                logger.exception('Cache invalidation failed for %s', key)
 
 
 def _cache_scope(request) -> tuple[str, str, str]:
@@ -109,10 +116,10 @@ def cached_api_response(
             namespaces = tuple(dict.fromkeys((namespace, *tags)))
             generation_keys = []
             for tag in namespaces:
-                generation_keys.extend((
-                    _generation_key(tag),
-                    _generation_key(tag, school_id),
-                ))
+                generation_keys.append(
+                    _generation_key(tag) if school_id == 'global'
+                    else _generation_key(tag, school_id)
+                )
                 if is_authenticated:
                     generation_keys.extend((
                         _generation_key(tag, user_id=user_id),
@@ -266,8 +273,8 @@ CACHE_KEYS = {
 
 # Cache TTL values (in seconds)
 CACHE_TTL = {
-    'dashboard_stats': 300,          # 5 minutes
-    'counts': 600,                   # 10 minutes
+    'dashboard_stats': 45,           # 45 seconds; counts and payments change frequently
+    'counts': 60,                    # 1 minute
     'user_session': 3600,            # 1 hour
     'api_rate_limit': 60,            # 1 minute
     'notification_count': 30,        # 30 seconds
@@ -278,10 +285,10 @@ CACHE_TTL = {
     'announcements': 600,            # 10 minutes
     'news': 600,                     # 10 minutes
     'notices': 600,                  # 10 minutes
-    'class_performance': 300,        # 5 minutes
-    'teacher_dashboard': 300,        # 5 minutes
+    'class_performance': 45,         # 45 seconds; grades and attendance change frequently
+    'teacher_dashboard': 45,         # 45 seconds; includes attendance
     'teacher_performance': 300,      # 5 minutes
-    'overall_attendance': 300,       # 5 minutes
+    'overall_attendance': 45,        # 45 seconds
     'student_classes': 600,          # 10 minutes
     'super_admin_usage': 600,        # 10 minutes
     'super_admin_analytics': 600,    # 10 minutes
@@ -299,19 +306,22 @@ CACHE_TTL = {
 # model signals in core/cache_signals.py as data is created/updated/deleted.
 CACHE_TTL.update({
     'homepage': 300,        # public marketing content (blog, faqs, partners)
-    'students': 60,         # rosters change often
-    'teachers': 120,
-    'parents': 120,
-    'schools': 300,
-    'courses': 300,         # subjects / classes / faculties
+    'students': 300,        # 5 minutes; roster mutations invalidate the tenant scope
+    'teachers': 300,        # 5 minutes
+    'parents': 300,         # 5 minutes
+    'schools': 1800,        # Stable school profile/configuration
+    'school_settings': 1800,
+    'courses': 900,         # 15 minutes; classes/subjects/reference data
+    'class_subject_pages': 300,  # 5 minutes for the School Admin class and subject pages
+    'timetables': 900,      # 15 minutes
     'feed': 60,             # learning feed lists
-    'notifications': 15,    # per-user, must feel live
-    'attendance': 120,
-    'billing': 180,
+    'notifications': 30,    # per-user, invalidated on notification writes
+    'attendance': 45,        # aggregate attendance reports only
+    'billing': 60,
     'assignments': 120,
     'messages': 60,
     'notices': 300,
-    'calendar': 600,
+    'calendar': 900,
 })
 
 

@@ -172,7 +172,7 @@ class SubjectViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanManageSubjects()]
         return [IsAuthenticated()]
 
-    @cached_api_response('courses', CACHE_TTL['courses'])
+    @cached_api_response('courses', CACHE_TTL['class_subject_pages'])
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
@@ -200,7 +200,7 @@ class ClassViewSet(viewsets.ModelViewSet):
             return [IsAuthenticated(), CanManageClasses()]
         return [IsAuthenticated()]
 
-    @cached_api_response('courses', CACHE_TTL['courses'], tags=('students', 'teachers'))
+    @cached_api_response('courses', CACHE_TTL['class_subject_pages'], tags=('students', 'teachers'))
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
@@ -931,6 +931,10 @@ class TimetableViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsAuthenticated(), CanManageTimetable()]
         return [IsAuthenticated()]
+
+    @cached_api_response('timetables', CACHE_TTL['timetables'])
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         school_id = get_school_filter(self.request.user)

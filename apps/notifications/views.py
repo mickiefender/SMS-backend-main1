@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count
 
-from core.cache import CACHE_TTL, cached_api_response, invalidate_cache_namespaces
+from core.cache import CACHE_TTL, cached_api_response, invalidate_model_cache
 from apps.notifications import models, serializers
 from apps.notifications.services import notification_service
 
@@ -67,7 +67,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['post'])
     def mark_all_read(self, request):
         count = notification_service.mark_all_as_read(request.user)
-        invalidate_cache_namespaces('notifications', user_id=request.user.pk)
+        invalidate_model_cache('notifications', user_id=request.user.pk)
         return Response({'status': 'all marked as read', 'count': count})
 
     @action(detail=False, methods=['get'])

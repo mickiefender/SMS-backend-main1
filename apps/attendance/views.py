@@ -9,10 +9,11 @@ from core.permissions import (
     IsTeacher, IsSchoolAdminOrTeacher,
     CanManageAttendanceOrTeach, ADMIN_ROLES, STAFF_ROLES,
 )
+from core.cache import CACHE_TTL, cached_api_response
 from apps.attendance.models import Attendance
 from apps.attendance.serializers import AttendanceSerializer
 from .tasks import send_attendance_marked_email
-from apps.academics.models import ClassSubjectTeacher, ClassTeacher
+from apps.academics.models import ClassSubjectTeacher, ClassTeacher, UserProfilePicture
 from apps.users.models import User, StudentProfile
 from core.notifications import notification_service
 from core.notifications_api import send_student_notification
@@ -331,6 +332,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         })
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    @cached_api_response('attendance', CACHE_TTL['attendance'])
     def class_report(self, request):
         """Get attendance report aggregated by class"""
         class_id = request.query_params.get('class_id')
@@ -387,7 +389,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         """Get school-scoped attendance totals for each student and class."""
         if request.user.role == 'super_admin':
             queryset = Attendance.objects.all()
-        elif request.user.role == 'school_admin' and request.user.school_id:
+        elif request.user.role in (ADMIN_ROLES | STAFF_ROLES) and request.user.school_id:
             queryset = Attendance.objects.filter(class_obj__school_id=request.user.school_id)
         else:
             return Response(
@@ -427,6 +429,8 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             'student_id',
             'student__first_name',
             'student__last_name',
+            'student__student_profile__student_id',
+            'student__student_profile__gender',
             'class_obj_id',
             'class_obj__name',
         ).annotate(
@@ -437,6 +441,14 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             excused_days=Count('id', filter=models.Q(status='excused')),
         ).order_by('student__last_name', 'student__first_name', 'class_obj__name')
 
+        student_stats = list(student_stats)
+        student_ids = {stat['student_id'] for stat in student_stats}
+        profile_picture_urls = {
+            picture.user_id: picture.display_url
+            for picture in UserProfilePicture.objects.filter(user_id__in=student_ids)
+            if picture.display_url
+        }
+
         results = []
         for stat in student_stats:
             total_days = stat['total_days']
@@ -444,6 +456,9 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             results.append({
                 'student_id': stat['student_id'],
                 'student_name': full_name or f"Student {stat['student_id']}",
+                'profile_picture_url': profile_picture_urls.get(stat['student_id']),
+                'student_id_number': stat['student__student_profile__student_id'] or None,
+                'gender': stat['student__student_profile__gender'] or None,
                 'class_id': stat['class_obj_id'],
                 'class_name': stat['class_obj__name'],
                 'total_days': total_days,
@@ -457,6 +472,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         return Response({'count': len(results), 'results': results})
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    @cached_api_response('attendance', CACHE_TTL['attendance'])
     def overall_report(self, request):
         """Get overall attendance report across all classes"""
         start_date = request.query_params.get('start_date')
@@ -524,6 +540,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         })
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    @cached_api_response('attendance', CACHE_TTL['attendance'])
     def subject_report(self, request):
         """Get attendance report aggregated by subject"""
         class_id = request.query_params.get('class_id')

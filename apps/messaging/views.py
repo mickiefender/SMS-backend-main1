@@ -515,7 +515,7 @@ class SMSSendView(APIView):
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=400)
-        return Response(SMSJobSerializer(job).data, status=202 if created else 200)
+        return Response(SMSJobSerializer(job).data, status=status.HTTP_200_OK)
 
 
 class AdminSMSSendView(APIView):

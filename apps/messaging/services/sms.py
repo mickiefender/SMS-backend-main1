@@ -1,9 +1,13 @@
 import re
+import logging
 
 from django.db import transaction
 from django.utils import timezone
 
-from ..models import SMSBalance, SMSCreditLedger, SMSMessage
+from ..models import SMSBalance, SMSCreditLedger, SMSJob, SMSMessage
+from .arkesel import ArkeselError, ArkeselProvider
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_VARIABLES = {
     "parent_name", "student_name", "class_name", "school_name", "amount",
@@ -70,9 +74,59 @@ def provider_message_id(response):
     return ""
 
 
+def dispatch_sms_job(job_id):
+    """Send a committed job to Arkesel and persist a result for each recipient."""
+    with transaction.atomic():
+        job = SMSJob.objects.select_for_update().select_related("school").get(pk=job_id)
+        if job.status in {"processing", "completed", "partially_failed", "failed"}:
+            return job
+        messages = list(job.messages.filter(status="queued"))
+        if not messages:
+            job.status = "failed"
+            job.completed_at = timezone.now()
+            job.save(update_fields=["status", "completed_at"])
+            return job
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+    provider = ArkeselProvider()
+    failed = 0
+    for sms in messages:
+        try:
+            response = provider.send(sms.sender_id, [sms.recipient], sms.message)
+            sms.status = "sent"
+            sms.provider_response = response
+            sms.provider_message_id = provider_message_id(response)
+            sms.save(update_fields=["status", "provider_response", "provider_message_id"])
+        except Exception as exc:
+            failed += 1
+            logger.warning(
+                "SMS dispatch failed for job %s message %s (%s)",
+                job.pk,
+                sms.pk,
+                exc.__class__.__name__,
+            )
+            sms.status = "failed"
+            sms.error_message = (
+                str(exc) if isinstance(exc, ArkeselError)
+                else "SMS provider request failed. Please contact support if this continues."
+            )
+            sms.save(update_fields=["status", "error_message"])
+            refund_credits(job.school, sms.credits_used, job=job)
+
+    job.status = (
+        "failed" if failed == len(messages)
+        else "partially_failed" if failed
+        else "completed"
+    )
+    job.completed_at = timezone.now()
+    job.save(update_fields=["status", "completed_at"])
+    return job
+
+
 def send_sms(*, school, recipients, message, sender_id=None, triggered_by=None,
-             category="custom", idempotency_key="", enqueue=True):
-    """Create an idempotent SMS job and queue delivery through Celery."""
+             category="custom", idempotency_key=""):
+    """Create a job, then synchronously dispatch it to the configured SMS provider."""
     from ..models import SMSConfiguration, SMSJob
     config = SMSConfiguration.objects.filter(school=school).first()
     if not config or not config.is_enabled or config.sender_id_status != "approved":
@@ -99,8 +153,7 @@ def send_sms(*, school, recipients, message, sender_id=None, triggered_by=None,
         normalized.append((phone, rendered))
     if not normalized:
         raise ValueError("No valid recipients were supplied.")
-    parts = message_parts(normalized[0][1])
-    credits = len(normalized) * parts
+    credits = sum(message_parts(rendered) for _, rendered in normalized)
     with transaction.atomic():
         job_kwargs = {
             "school": school, "requested_by": triggered_by,
@@ -110,24 +163,17 @@ def send_sms(*, school, recipients, message, sender_id=None, triggered_by=None,
             job, created = SMSJob.objects.get_or_create(
                 school=school, idempotency_key=idempotency_key, defaults=job_kwargs,
             )
-            if not created:
-                return job, False
         else:
             job = SMSJob.objects.create(**job_kwargs)
-        reserve_credits(school, credits, actor=triggered_by, job=job)
-        SMSMessage.objects.bulk_create([
-            SMSMessage(
-                school=school, job=job, sender_id=sender_id, recipient=phone,
-                message=rendered, category=category, message_parts=message_parts(rendered),
-                credits_used=message_parts(rendered), sent_by=triggered_by,
-            )
-            for phone, rendered in normalized
-        ])
-    if enqueue:
-        try:
-            from ..tasks import process_sms_job
-            process_sms_job.delay(job.pk)
-        except Exception:
-            # A queued job can be retried when the worker becomes available.
-            pass
-    return job, True
+            created = True
+        if created:
+            reserve_credits(school, credits, actor=triggered_by, job=job)
+            SMSMessage.objects.bulk_create([
+                SMSMessage(
+                    school=school, job=job, sender_id=sender_id, recipient=phone,
+                    message=rendered, category=category, message_parts=message_parts(rendered),
+                    credits_used=message_parts(rendered), sent_by=triggered_by,
+                )
+                for phone, rendered in normalized
+            ])
+    return dispatch_sms_job(job.pk), created

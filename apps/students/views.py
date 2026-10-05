@@ -8,6 +8,7 @@ from core.permissions import (
     IsStudent, IsSchoolAdminOrHigher, IsSchoolAdminOrTeacher,
     CanManageGradesOrTeach, CanManageStudents,
 )
+from core.cache import invalidate_model_cache
 from apps.students.models import Grade, StudentGPA, StudentSocialClub, StudentSocialClubMember
 from apps.students.serializers import GradeSerializer, StudentGPASerializer, StudentPortalSerializer, StudentSocialClubSerializer, StudentSocialClubMemberSerializer
 from apps.students.tasks import send_faculty_advisor_notification
@@ -229,7 +230,7 @@ class GradeViewSet(viewsets.ModelViewSet):
         if not class_id or not subject_id:
             return Response({'error': 'class_id and subject_id are required'}, status=400)
         
-        from apps.academics.models import StudentClass
+        from apps.academics.models import Class, StudentClass
         from apps.students.models import Grade
         
         # Get student IDs in this class
@@ -254,6 +255,12 @@ class GradeViewSet(viewsets.ModelViewSet):
             locked_by=request.user,
             locked_at=timezone.now()
         )
+        if updated_count:
+            school_id = Class.objects.filter(pk=class_id).values_list(
+                'school_id', flat=True
+            ).first()
+            if school_id is not None:
+                invalidate_model_cache('students', school_id=school_id)
         
         return Response({
             'success': True,
@@ -270,7 +277,7 @@ class GradeViewSet(viewsets.ModelViewSet):
         if not class_id or not subject_id:
             return Response({'error': 'class_id and subject_id are required'}, status=400)
         
-        from apps.academics.models import StudentClass
+        from apps.academics.models import Class, StudentClass
         from apps.students.models import Grade
         
         # Get student IDs in this class
@@ -295,6 +302,12 @@ class GradeViewSet(viewsets.ModelViewSet):
             locked_by=None,
             locked_at=None
         )
+        if updated_count:
+            school_id = Class.objects.filter(pk=class_id).values_list(
+                'school_id', flat=True
+            ).first()
+            if school_id is not None:
+                invalidate_model_cache('students', school_id=school_id)
         
         return Response({
             'success': True,

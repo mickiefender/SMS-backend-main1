@@ -9,8 +9,9 @@ Design notes
 ------------
 * Over-invalidation is safe, under-invalidation is not. When unsure, map a
   model to every namespace that could read it.
-* Invalidation is *scoped by school* when the instance carries a ``school``
-  (or ``school_id``) so one tenant's write never flushes another tenant.
+* Invalidation is scoped by school when the instance carries a ``school``
+  (or ``school_id``), and also bumps the global generation for platform-wide
+  views. A tenant write never flushes another tenant's scoped entries.
   Models without a tenant fall back to a global bump for their namespace.
 * The ``notifications`` namespace is intentionally NOT listed here: notification
   rows are per-recipient and are invalidated with a user-scoped generation by
@@ -18,20 +19,21 @@ Design notes
   another user's cached list.
 """
 from django.db.models.signals import post_delete, post_save, pre_save
+from django.db import transaction
 
-from core.cache import invalidate_model_cache
+from core.cache import CACHE_KEYS, DashboardCache, invalidate_keys, invalidate_model_cache
 
 
 MODEL_NAMESPACES = {
     # ── Users / people ───────────────────────────────────────────────
-    'users.user': ('students', 'teachers', 'parents'),
+    'users.user': ('students', 'teachers', 'parents', 'timetables'),
     'users.studentprofile': ('students',),
     'users.teacherprofile': ('teachers',),
     'users.parentstudentrelationship': ('parents',),
 
     # ── Academics structure ──────────────────────────────────────────
-    'academics.class': ('courses', 'students', 'teachers'),
-    'academics.subject': ('courses', 'teachers'),
+    'academics.class': ('courses', 'students', 'teachers', 'timetables'),
+    'academics.subject': ('courses', 'teachers', 'timetables'),
     'academics.faculty': ('courses',),
     'academics.department': ('courses',),
     'academics.level': ('courses',),
@@ -41,16 +43,18 @@ MODEL_NAMESPACES = {
     'academics.studentclass': ('students', 'courses'),
     'academics.enrollment': ('students', 'courses'),
     'academics.studentenrollment': ('students', 'courses'),
-    'academics.timetable': ('courses', 'calendar'),
+    'academics.timetable': ('courses', 'calendar', 'timetables'),
     'academics.examresult': ('students',),
     'academics.terminalreport': ('students',),
     'academics.subjectscore': ('students',),
     'academics.assessment': ('students', 'courses'),
     'academics.assessmenttype': ('courses',),
+    'academics.userprofilepicture': ('students', 'teachers'),
     'academics.gradingscale': ('courses',),
     'academics.gradingpolicy': ('courses',),
     'academics.academicsession': ('courses', 'calendar'),
     'academics.academiccalendarevent': ('calendar',),
+    'academics.academicyear': ('calendar', 'courses'),
     'academics.schoolevent': ('calendar', 'notices'),
     'academics.notice': ('notices',),
 
@@ -91,6 +95,13 @@ MODEL_NAMESPACES = {
     'platform.featureflag': ('homepage',),
 }
 
+PLATFORM_ANALYTICS_MODELS = {
+    'schools.school',
+    'users.user',
+    'billing.manualpayment',
+    'billing.onlinepayment',
+}
+
 # Models whose ``school`` FK may change on update: remember the previous tenant
 # so both the old and new school scopes are invalidated.
 SCHOOL_MOVABLE_MODELS = {
@@ -118,7 +129,11 @@ def _resolve_school_id(sender, instance):
     if school_id:
         return school_id
 
-    if sender._meta.label_lower in ('users.studentprofile', 'users.teacherprofile'):
+    if sender._meta.label_lower in (
+        'users.studentprofile',
+        'users.teacherprofile',
+        'academics.userprofilepicture',
+    ):
         from apps.users.models import User
         return User.objects.filter(pk=instance.user_id).values_list('school_id', flat=True).first()
 
@@ -134,9 +149,16 @@ def _resolve_school_id(sender, instance):
 
     # Fall back to the related user's school when only a user FK is present.
     user_id = getattr(instance, 'user_id', None)
-    if user_id and sender._meta.label_lower in ('students.grade', 'users.parentstudentrelationship'):
+    if user_id and sender._meta.label_lower in (
+        'users.parentstudentrelationship',
+    ):
         from apps.users.models import User
         return User.objects.filter(pk=user_id).values_list('school_id', flat=True).first()
+
+    student_id = getattr(instance, 'student_id', None)
+    if student_id and sender._meta.label_lower == 'students.grade':
+        from apps.users.models import User
+        return User.objects.filter(pk=student_id).values_list('school_id', flat=True).first()
 
     return None
 
@@ -164,17 +186,32 @@ def _invalidate_model_caches(sender, instance, **kwargs):
             return
 
     if sender._meta.label_lower == 'schools.school':
-        # A school row itself has no tenant scope: clear the global namespace
-        # and the per-school scope.
-        invalidate_model_cache(*namespaces)
+        # One generation bump invalidates both this school's scope and
+        # platform-wide (Super Admin) results, without flushing other schools.
         invalidate_model_cache(*namespaces, school_id=instance.pk)
-        return
+        school_ids = {instance.pk}
+    else:
+        school_id = _resolve_school_id(sender, instance)
+        previous_school_id = getattr(instance, '_cache_previous_school_id', None)
+        school_ids = {value for value in (school_id, previous_school_id) if value}
+        if school_ids:
+            for tenant_id in school_ids:
+                invalidate_model_cache(*namespaces, school_id=tenant_id)
+        else:
+            invalidate_model_cache(*namespaces)
 
-    school_id = _resolve_school_id(sender, instance)
-    previous_school_id = getattr(instance, '_cache_previous_school_id', None)
-    invalidate_model_cache(*namespaces, school_id=school_id)
-    if previous_school_id and previous_school_id != school_id:
-        invalidate_model_cache(*namespaces, school_id=previous_school_id)
+    model_label = sender._meta.label_lower
+    for tenant_id in school_ids:
+        transaction.on_commit(
+            lambda tenant_id=tenant_id: DashboardCache.invalidate_stats(tenant_id)
+        )
+
+    if model_label in PLATFORM_ANALYTICS_MODELS:
+        platform_keys = (
+            CACHE_KEYS['super_admin_usage'],
+            CACHE_KEYS['super_admin_analytics'],
+        )
+        transaction.on_commit(lambda: invalidate_keys(*platform_keys))
 
 
 def register_cache_signals():

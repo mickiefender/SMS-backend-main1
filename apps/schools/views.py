@@ -13,7 +13,7 @@ from core.permissions import (
 )
 from core.cache import (
     DashboardCache, CACHE_KEYS, CACHE_TTL, cache, cached_api_response,
-    invalidate_cache_namespaces,
+    invalidate_cache_namespaces, invalidate_keys,
 )
 from apps.schools.models import School, Plan, Subscription, Announcement
 from apps.schools.signals import _invalidate_school_lookup_cache
@@ -83,8 +83,9 @@ class SchoolViewSet(viewsets.ModelViewSet):
             )
 
         _invalidate_school_lookup_cache(school_id)
-        invalidate_cache_namespaces('schools', 'homepage')
         invalidate_cache_namespaces('schools', 'homepage', school_id=school_id)
+        DashboardCache.invalidate_stats(school_id)
+        invalidate_keys(CACHE_KEYS['super_admin_usage'], CACHE_KEYS['super_admin_analytics'])
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -106,7 +107,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         """
         Get dashboard statistics with caching
         """
-        school_id = request.user.school_id if hasattr(request.user, 'school_id') and request.user.school else None
+        school_id = getattr(request.user, 'school_id', None)
         
         if not school_id:
             return Response({'error': 'School not found'}, status=status.HTTP_400_BAD_REQUEST)
@@ -131,14 +132,18 @@ class SchoolViewSet(viewsets.ModelViewSet):
         # Staff/Parents count (other users)
         parents_count = User.objects.filter(role='parent', school_id=school_id).count()
         
-        # Get total revenue from billing (ManualPayment)
-        try:
-            from apps.billing.models import ManualPayment
-            total_earnings = ManualPayment.objects.filter(
-                school_id=school_id
-            ).aggregate(total=Sum('amount'))['total'] or 0
-        except Exception:
-            total_earnings = 0
+        # Include collected manual payments and successful online student-fee
+        # payments; pending or failed online transactions are not collections.
+        from apps.billing.models import ManualPayment, OnlinePayment
+
+        manual_earnings = ManualPayment.objects.filter(
+            school_id=school_id
+        ).aggregate(total=Sum('amount'))['total'] or 0
+        online_earnings = OnlinePayment.objects.filter(
+            school_id=school_id,
+            status='success',
+        ).aggregate(total=Sum('amount'))['total'] or 0
+        total_earnings = manual_earnings + online_earnings
         
         stats = {
             'students': students_count,
@@ -148,7 +153,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
             'calculated_at': now.isoformat(),
         }
         
-        # Cache the stats (5 minutes)
+        # Dashboard statistics use the short-lived cache policy.
         DashboardCache.cache_stats(school_id, stats)
         
         return Response({
