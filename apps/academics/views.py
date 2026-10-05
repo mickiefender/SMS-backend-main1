@@ -240,13 +240,18 @@ class ClassViewSet(viewsets.ModelViewSet):
             serializer.save()
 
     @action(detail=False, methods=['get'])
-    @cached_api_response('courses', CACHE_TTL['dashboard_stats'], tags=('students',))
+    @cached_api_response(
+        'class_performance',
+        CACHE_TTL['class_performance'],
+        tags=('courses', 'students'),
+    )
     def performance(self, request):
-        """Get class performance analytics with grades and attendance"""
-        from django.db.models import Avg, Count
+        """Get class performance analytics from recorded grades and attendance."""
+        from django.db.models import Avg, Count, ExpressionWrapper, F, FloatField
         from datetime import timedelta
         from apps.attendance.models import Attendance
-        from apps.academics.models import ExamResult, StudentClass
+        from apps.academics.models import StudentClass
+        from apps.students.models import Grade
 
         school_id = get_school_filter(request.user)
         if not school_id:
@@ -258,16 +263,34 @@ class ClassViewSet(viewsets.ModelViewSet):
             student_count=Count('student_enrollments', filter=models.Q(student_enrollments__is_active=True))
         ).select_related('level')
 
+        grade_averages = Grade.objects.filter(
+            student__school_id=school_id,
+            student__class_assignments__class_obj__school_id=school_id,
+            student__class_assignments__is_active=True,
+            subject__school_id=school_id,
+            max_score__gt=0,
+        ).annotate(
+            raw_percentage=ExpressionWrapper(
+                F('score') * 100.0 / F('max_score'),
+                output_field=FloatField(),
+            )
+        ).values(
+            'student__class_assignments__class_obj_id'
+        ).annotate(
+            average_score=Avg('raw_percentage'),
+        )
+        average_score_by_class = {
+            row['student__class_assignments__class_obj_id']: row['average_score'] or 0
+            for row in grade_averages
+        }
+
         performance_data = []
         for cls in classes:
             # Student count
             student_count = cls.student_count or StudentClass.objects.filter(class_obj=cls, is_active=True).count()
 
-            # Average grade score (percentage from all exams)
-            avg_score = 0
-            exam_results = ExamResult.objects.filter(exam__class_obj=cls)
-            if exam_results.exists():
-                avg_score = exam_results.aggregate(average=Avg('percentage'))['average'] or 0
+            # Grade entry uses students.Grade, not the separate ExamResult model.
+            avg_score = average_score_by_class.get(cls.id, 0)
 
             # Attendance percentage (last 90 days)
             total_attendance_days = Attendance.objects.filter(

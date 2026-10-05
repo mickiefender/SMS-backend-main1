@@ -84,6 +84,9 @@ PLATFORM_VIEW_PERMISSIONS = {
     'TrustedSchoolLogoUploadView': 'content.manage',
     'TrustedSchoolLogoDeleteView': 'content.manage',
     'SupportTicketViewSet': 'platform.support',
+    'ChatwootConversationsView': 'platform.support',
+    'ChatwootConversationMessagesView': 'platform.support',
+    'ChatwootConversationStatusView': 'platform.support',
     'StorageQuotaViewSet': 'platform.storage',
     'MonitoringSnapshotViewSet': 'platform.monitoring',
     'SystemHealthView': 'platform.monitoring',
@@ -1169,6 +1172,63 @@ class SystemHealthView(APIView):
                        'error_rate': error_rate, 'requests_last_hour': total})
 
         return Response({'checked_at': now_iso(), 'checks': checks})
+
+
+class ChatwootConversationsView(APIView):
+    """Proxy the Chatwoot inbox list without exposing its API token."""
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        from apps.platform.chatwoot import list_conversations
+
+        try:
+            page = max(1, int(request.query_params.get('page', '1')))
+        except (TypeError, ValueError):
+            return Response({'detail': 'Page must be a positive integer.'}, status=status.HTTP_400_BAD_REQUEST)
+        status_filter = request.query_params.get('status', 'all')
+        if status_filter not in ('all', 'open', 'resolved', 'pending', 'snoozed'):
+            return Response({'detail': 'Unsupported conversation status.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(list_conversations(page=page, status_filter=status_filter))
+
+
+class ChatwootConversationMessagesView(APIView):
+    """Read messages or send a public reply in a Chatwoot conversation."""
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request, conversation_id):
+        from apps.platform.chatwoot import get_messages
+        return Response(get_messages(conversation_id))
+
+    def post(self, request, conversation_id):
+        from apps.platform.chatwoot import send_reply
+        result = send_reply(conversation_id, request.data.get('content'))
+        write_audit_log(
+            request,
+            request.user,
+            'chatwoot.reply_sent',
+            'chatwoot_conversation',
+            conversation_id,
+            changes={'message_id': result.get('id')},
+        )
+        return Response(result, status=status.HTTP_201_CREATED)
+
+
+class ChatwootConversationStatusView(APIView):
+    """Resolve or reopen a Chatwoot conversation."""
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request, conversation_id):
+        from apps.platform.chatwoot import update_conversation_status
+        result = update_conversation_status(conversation_id, request.data.get('status'))
+        write_audit_log(
+            request,
+            request.user,
+            'chatwoot.conversation_status_updated',
+            'chatwoot_conversation',
+            conversation_id,
+            changes={'status': request.data.get('status')},
+        )
+        return Response(result)
 
 
 def now_iso():

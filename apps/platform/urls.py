@@ -11,6 +11,8 @@ from apps.platform.views import (
     PublicFaqsView, FaqView,
     PublicBlogPostsView, BlogPostView,
     PlatformStaffView,
+    ChatwootConversationsView, ChatwootConversationMessagesView,
+    ChatwootConversationStatusView,
     ContactInquiryView,
     TrustedSchoolLogoUploadView,
     TrustedSchoolLogoDeleteView,
@@ -58,4 +60,7 @@ urlpatterns = [
     path('overview/', PlatformOverviewView.as_view(), name='platform-overview'),
     path('health/', SystemHealthView.as_view(), name='platform-health'),
     path('impersonate/', ImpersonationView.as_view(), name='platform-impersonate'),
+    path('chatwoot/conversations/', ChatwootConversationsView.as_view(), name='chatwoot-conversations'),
+    path('chatwoot/conversations/<int:conversation_id>/messages/', ChatwootConversationMessagesView.as_view(), name='chatwoot-conversation-messages'),
+    path('chatwoot/conversations/<int:conversation_id>/status/', ChatwootConversationStatusView.as_view(), name='chatwoot-conversation-status'),
 ]

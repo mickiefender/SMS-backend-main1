@@ -103,6 +103,35 @@ Schools are isolated using the `school` foreign key. The middleware automaticall
 2. `school_id` query parameter
 3. User's school (if authenticated)
 
+## Alara Help (Chatwoot)
+
+The school dashboard uses the Chatwoot website widget. Configure the public
+`NEXT_PUBLIC_CHATWOOT_WEBSITE_TOKEN` and optional
+`NEXT_PUBLIC_CHATWOOT_BASE_URL` in the frontend deployment environment. The
+widget identifies the authenticated Alara user and supplies school name, school
+ID, and role as Chatwoot contact attributes.
+
+The Super Admin Alara Help page uses Django endpoints to proxy the Chatwoot
+inbox. Set `CHATWOOT_BASE_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`,
+and `CHATWOOT_INBOX_ID` in the backend environment, using
+[`.env.example`](./.env.example) as a reference. Do not configure private
+Chatwoot API credentials in frontend environment variables. No local message
+tables or migration are required: Chatwoot is the conversation store.
+
+Configure a Chatwoot Website Inbox named **Alara Help**, use the widget token
+for that inbox, and enable the inbox in the server-side `CHATWOOT_INBOX_ID`.
+The Super Admin API routes are:
+
+- `GET /api/platform/chatwoot/conversations/?status=all&page=1`
+- `GET /api/platform/chatwoot/conversations/{conversation_id}/messages/`
+- `POST /api/platform/chatwoot/conversations/{conversation_id}/messages/`
+- `POST /api/platform/chatwoot/conversations/{conversation_id}/status/` with
+  `{"status":"open"}` or `{"status":"resolved"}`
+
+Every route requires the existing `platform.support` permission or a Super
+Admin role. Messages sent from the portal are public replies to the school
+conversation. The page polls Chatwoot for updates every 15 seconds.
+
 ## Caching
 
 Django uses the configured Redis cache (`REDIS_URL`, defaulting to

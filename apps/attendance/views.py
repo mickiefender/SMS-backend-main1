@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db import models
 from django.db.models import Count, Avg, F
+from django.utils.dateparse import parse_date
 from core.permissions import (
     IsTeacher, IsSchoolAdminOrTeacher,
     CanManageAttendanceOrTeach, ADMIN_ROLES, STAFF_ROLES,
@@ -380,6 +381,80 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             })
         
         return Response({'results': results})
+
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def student_summary(self, request):
+        """Get school-scoped attendance totals for each student and class."""
+        if request.user.role == 'super_admin':
+            queryset = Attendance.objects.all()
+        elif request.user.role == 'school_admin' and request.user.school_id:
+            queryset = Attendance.objects.filter(class_obj__school_id=request.user.school_id)
+        else:
+            return Response(
+                {'detail': 'Only school administrators can view student attendance summaries.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        class_id = request.query_params.get('class_id')
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+
+        if class_id:
+            try:
+                class_id = int(class_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'detail': 'class_id must be a valid class ID.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            queryset = queryset.filter(class_obj_id=class_id)
+        if start_date:
+            if not parse_date(start_date):
+                return Response(
+                    {'detail': 'start_date must be a valid date in YYYY-MM-DD format.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            queryset = queryset.filter(date__gte=start_date)
+        if end_date:
+            if not parse_date(end_date):
+                return Response(
+                    {'detail': 'end_date must be a valid date in YYYY-MM-DD format.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            queryset = queryset.filter(date__lte=end_date)
+
+        student_stats = queryset.values(
+            'student_id',
+            'student__first_name',
+            'student__last_name',
+            'class_obj_id',
+            'class_obj__name',
+        ).annotate(
+            total_days=Count('id'),
+            present_days=Count('id', filter=models.Q(status='present')),
+            absent_days=Count('id', filter=models.Q(status='absent')),
+            late_days=Count('id', filter=models.Q(status='late')),
+            excused_days=Count('id', filter=models.Q(status='excused')),
+        ).order_by('student__last_name', 'student__first_name', 'class_obj__name')
+
+        results = []
+        for stat in student_stats:
+            total_days = stat['total_days']
+            full_name = f"{stat['student__first_name']} {stat['student__last_name']}".strip()
+            results.append({
+                'student_id': stat['student_id'],
+                'student_name': full_name or f"Student {stat['student_id']}",
+                'class_id': stat['class_obj_id'],
+                'class_name': stat['class_obj__name'],
+                'total_days': total_days,
+                'present_days': stat['present_days'],
+                'absent_days': stat['absent_days'],
+                'late_days': stat['late_days'],
+                'excused_days': stat['excused_days'],
+                'attendance_percentage': round(stat['present_days'] / total_days * 100, 1) if total_days else 0,
+            })
+
+        return Response({'count': len(results), 'results': results})
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def overall_report(self, request):
