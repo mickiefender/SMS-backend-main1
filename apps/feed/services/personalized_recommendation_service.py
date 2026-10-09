@@ -219,7 +219,22 @@ class PersonalizedRecommendationService:
         ranked = cls._interleave_discovery(ranked, base_qs, signals['seen_ids'])
 
         # ── 4b. Diversity spacing ───────────────────────────────
-        return cls.apply_diversity_spacing(ranked)
+        ranked = cls.apply_diversity_spacing(ranked)
+
+        # A guest pull-to-refresh gets a fresh entry point into the ranked
+        # pool, while preserving the learned ordering for the whole snapshot.
+        if strategy == 'guest_explore' and len(ranked) > 1:
+            ranked = cls._rotate_guest_exploration(ranked)
+
+        return ranked
+
+    @staticmethod
+    def _rotate_guest_exploration(ranked: List[FeedLesson]) -> List[FeedLesson]:
+        """Rotate a fresh guest snapshot to expose different ranked lessons."""
+        if len(ranked) < 2:
+            return ranked
+        offset = random.randint(1, min(12, len(ranked) - 1))
+        return ranked[offset:] + ranked[:offset]
 
     @staticmethod
     def _gather_signals(user, guest_device_id: str, now) -> dict:

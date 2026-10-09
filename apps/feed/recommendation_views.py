@@ -56,6 +56,7 @@ class BlendedFeedView(APIView):
         guest_device_id = request.query_params.get('device_id', '')
         school_id = request.query_params.get('school_id')
         feed_token = request.query_params.get('feed_token', '')
+        explore = request.query_params.get('explore') == 'true'
         raw_cursor = request.query_params.get('cursor')
         try:
             cursor = max(0, int(raw_cursor)) if raw_cursor is not None else None
@@ -100,6 +101,7 @@ class BlendedFeedView(APIView):
                 user=user,
                 guest_device_id=guest_device_id,
                 school_id=school_id,
+                strategy='guest_explore' if explore and not user else 'personalized',
             )
             cursor = 0
 

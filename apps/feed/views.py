@@ -6,6 +6,7 @@ All business logic is delegated to services. Views are thin.
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import filters, status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -19,7 +20,7 @@ from apps.feed.pagination import (
 )
 from apps.feed.permissions import (
     IsGuestReadOnly, IsTeacher, IsTeacherOwner, IsOwnerOrAdmin,
-    IsCommentOwnerOrAdmin, IsModerator,
+    IsCommentOwnerOrAdmin, IsModerator, IsAuthenticatedStudentOrParent,
 )
 from apps.feed.services.feed_service import FeedService
 from apps.feed.services.lesson_service import LessonService
@@ -446,11 +447,14 @@ class TeacherFeedView(APIView):
             'teacher': {
                 'id': data['profile'].user_id,
                 'name': data['profile'].user.get_full_name(),
+                'username': data['profile'].user.username,
                 'profile_picture': profile_picture_url,
                 'bio': data['profile'].bio,
                 'specialization': data['profile'].specialization,
                 'follower_count': data['follower_count'],
+                'following_count': data['following_count'],
                 'is_following': data['is_following'],
+                'total_lessons': lessons.count(),
             },
             'lessons': lesson_results,
             'results': lesson_results,
@@ -459,6 +463,70 @@ class TeacherFeedView(APIView):
             'count': paginated_response.data.get('count'),
         }
         return Response(response_data)
+
+
+class TeacherProfileSummaryView(APIView):
+    """GET /api/feed/teacher/{id}/profile/"""
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk):
+        from apps.users.models import TeacherProfile
+
+        try:
+            profile = TeacherProfile.objects.select_related(
+                'user',
+            ).get(user_id=pk, user__role='teacher')
+        except TeacherProfile.DoesNotExist:
+            raise NotFound('Teacher profile not found.')
+
+        user = profile.user
+        profile_picture_url = None
+        try:
+            profile_picture = getattr(user, 'profile_picture', None)
+            if profile_picture:
+                profile_picture_url = profile_picture.display_url
+        except Exception:
+            profile_picture_url = None
+
+        return Response({
+            'id': user.id,
+            'name': user.get_full_name(),
+            'username': user.username,
+            'profile_picture': profile_picture_url,
+            'bio': profile.bio,
+            'specialization': profile.specialization,
+            'follower_count': models.TeacherFollower.objects.filter(
+                teacher_id=user.id,
+            ).count(),
+            'following_count': models.TeacherFollower.objects.filter(
+                user_id=user.id,
+            ).count(),
+            'is_following': (
+                request.user.is_authenticated
+                and models.TeacherFollower.objects.filter(
+                    user=request.user,
+                    teacher_id=user.id,
+                ).exists()
+            ),
+            'total_lessons': FeedService.get_teacher_feed(
+                user.id, request.user,
+            ).count(),
+        })
+
+
+class TeacherLessonsView(APIView):
+    """GET /api/feed/teacher/{id}/lessons/"""
+    permission_classes = [AllowAny]
+    pagination_class = FeedCursorPagination
+
+    def get(self, request, pk):
+        lessons = FeedService.get_teacher_feed(pk, request.user)
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(lessons, request, view=self)
+        serializer = serializers.LessonListSerializer(
+            page, many=True, context={'request': request},
+        )
+        return paginator.get_paginated_response(serializer.data)
 
 
 class TeacherFollowView(APIView):
@@ -486,6 +554,75 @@ class TeacherFollowView(APIView):
             metadata={'teacher_id': pk},
         )
         return Response({'following': False})
+
+
+class TeacherFollowersPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class MyTeacherFollowersView(APIView):
+    """GET /api/feed/teacher/followers/"""
+    permission_classes = [IsTeacher]
+    pagination_class = TeacherFollowersPagination
+
+    def get(self, request):
+        followers = models.TeacherFollower.objects.filter(
+            teacher=request.user
+        ).select_related('user').order_by('-created_at', '-pk')
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(followers, request, view=self)
+        serializer = serializers.TeacherFollowerSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+
+class MyFollowedTeachersView(APIView):
+    """GET /api/feed/follows/following/"""
+    permission_classes = [IsAuthenticatedStudentOrParent]
+    pagination_class = TeacherFollowersPagination
+
+    def get(self, request):
+        following = models.TeacherFollower.objects.filter(
+            user=request.user
+        ).select_related('teacher', 'teacher__school').order_by('-created_at', '-pk')
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(following, request, view=self)
+        serializer = serializers.FollowedTeacherSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+
+class SavedLessonsPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class SavedLessonsView(APIView):
+    """GET /api/feed/saved/"""
+    permission_classes = [IsAuthenticated]
+    pagination_class = SavedLessonsPagination
+
+    def get(self, request):
+        visible_lessons = FeedService.visible_lessons(
+            request.user,
+            school_id=request.user.school_id,
+        )
+        lessons = visible_lessons.filter(
+            saves__user=request.user,
+        ).select_related(
+            'teacher', 'school', 'level', 'class_obj', 'subject',
+            'content_type', 'difficulty_level', 'curriculum',
+            'learning_objective',
+        ).prefetch_related('tags', 'resources').order_by(
+            '-saves__created_at', '-pk',
+        )
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(lessons, request, view=self)
+        serializer = serializers.LessonListSerializer(
+            page, many=True, context={'request': request},
+        )
+        return paginator.get_paginated_response(serializer.data)
 
 
 class FeedCommentViewSet(viewsets.ModelViewSet):

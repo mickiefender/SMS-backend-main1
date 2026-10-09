@@ -404,6 +404,50 @@ class FeedCommentSerializer(serializers.ModelSerializer):
         return models.CommentLike.objects.filter(user=user, comment=obj).exists()
 
 
+class TeacherFollowerSerializer(serializers.ModelSerializer):
+    user_id = serializers.IntegerField(read_only=True)
+    user_name = serializers.SerializerMethodField()
+    user_profile_picture = serializers.SerializerMethodField()
+    followed_at = serializers.DateTimeField(source='created_at', read_only=True)
+
+    class Meta:
+        model = models.TeacherFollower
+        fields = ['user_id', 'user_name', 'user_profile_picture', 'followed_at']
+
+    def get_user_name(self, obj):
+        return obj.user.get_full_name().strip() or obj.user.username
+
+    def get_user_profile_picture(self, obj):
+        profile_picture = getattr(obj.user, 'profile_picture', None)
+        return profile_picture.display_url if profile_picture else None
+
+
+class FollowedTeacherSerializer(serializers.ModelSerializer):
+    teacher_id = serializers.IntegerField(read_only=True)
+    teacher_name = serializers.SerializerMethodField()
+    teacher_profile_picture = serializers.SerializerMethodField()
+    school_name = serializers.SerializerMethodField()
+    followed_at = serializers.DateTimeField(source='created_at', read_only=True)
+
+    class Meta:
+        model = models.TeacherFollower
+        fields = [
+            'teacher_id', 'teacher_name', 'teacher_profile_picture',
+            'school_name', 'followed_at',
+        ]
+
+    def get_teacher_name(self, obj):
+        return obj.teacher.get_full_name().strip() or obj.teacher.username
+
+    def get_teacher_profile_picture(self, obj):
+        profile_picture = getattr(obj.teacher, 'profile_picture', None)
+        return profile_picture.display_url if profile_picture else None
+
+    def get_school_name(self, obj):
+        school = getattr(obj.teacher, 'school', None)
+        return school.name if school else None
+
+
 class CommentCreateSerializer(serializers.Serializer):
     content = serializers.CharField(required=True, allow_blank=False, write_only=True)
     parent_comment_id = serializers.PrimaryKeyRelatedField(

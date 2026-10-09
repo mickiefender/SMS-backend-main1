@@ -3,6 +3,7 @@ Unit tests for the Alara Learning Feed.
 """
 from datetime import timedelta
 from decimal import Decimal
+from uuid import uuid4
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from django.urls import reverse
@@ -13,6 +14,10 @@ from rest_framework import status
 from apps.feed import models
 from apps.feed.services.lesson_service import LessonService
 from apps.feed.services.recommendation_service import RecommendationService
+from apps.feed.services.guest_service import GuestService
+from apps.feed.services.personalized_recommendation_service import (
+    PersonalizedRecommendationService,
+)
 from apps.feed.services.analytics_service import AnalyticsService
 from apps.feed.services.moderation_service import ModerationService
 from apps.feed.pagination import FeedCursorPagination
@@ -114,6 +119,44 @@ class FeedServiceTest(TestCase):
     def test_guest_trending_includes_public_lesson(self):
         qs = RecommendationService.get_guest_recommendations('trending')
         self.assertIn(self.lesson.id, list(qs.values_list('id', flat=True)))
+
+    def test_guest_feed_includes_public_lessons_outside_onboarding_preferences(self):
+        other_level = models.FeedAcademicLevel.objects.create(
+            name='Primary', slug='primary'
+        )
+        other_lesson = models.FeedLesson.objects.create(
+            title='Fractions',
+            teacher=self.teacher,
+            school=self.school,
+            level=other_level,
+            subject=self.subject,
+            visibility='public',
+            status='approved',
+            published_at='2024-01-02T00:00:00Z',
+        )
+        device_id = uuid4()
+        models.GuestLearner.objects.create(
+            device_id=device_id,
+            name='Guest',
+            level=self.level,
+            subject_ids=[],
+        )
+
+        lesson_ids = set(
+            GuestService.get_feed_for_guest(str(device_id)).values_list('id', flat=True)
+        )
+
+        self.assertIn(self.lesson.id, lesson_ids)
+        self.assertIn(other_lesson.id, lesson_ids)
+
+    def test_guest_explore_refresh_rotates_ranked_lessons_without_dropping_them(self):
+        ranked = [object() for _ in range(20)]
+        expected = {id(lesson) for lesson in ranked}
+
+        explored = PersonalizedRecommendationService._rotate_guest_exploration(ranked)
+
+        self.assertEqual({id(lesson) for lesson in explored}, expected)
+        self.assertNotEqual(explored[0], ranked[0])
 
     def test_personalized_recommendations_match_preferred_subject(self):
         profile, _ = models.LearningProfile.objects.get_or_create(user=self.student)
@@ -247,6 +290,97 @@ class FeedAPITest(APITestCase):
         response = self.client.post(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(models.FeedLesson.objects.filter(title='New Lesson').count(), 1)
+
+    def test_teacher_can_list_own_followers(self):
+        models.TeacherFollower.objects.create(user=self.student, teacher=self.teacher)
+        self.client.force_authenticate(user=self.teacher)
+
+        response = self.client.get(reverse('feed-teacher-followers'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['user_id'], self.student.id)
+        self.assertEqual(
+            response.data['results'][0]['user_name'],
+            self.student.get_full_name() or self.student.username,
+        )
+
+    def test_non_teacher_cannot_list_teacher_followers(self):
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get(reverse('feed-teacher-followers'))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_student_can_list_teachers_they_follow(self):
+        models.TeacherFollower.objects.create(user=self.student, teacher=self.teacher)
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get(reverse('feed-following'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['teacher_id'], self.teacher.id)
+        self.assertEqual(
+            response.data['results'][0]['teacher_name'],
+            self.teacher.get_full_name() or self.teacher.username,
+        )
+
+    def test_guest_cannot_list_followed_teachers(self):
+        response = self.client.get(reverse('feed-following'))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_student_can_list_saved_lessons(self):
+        models.FeedSave.objects.create(user=self.student, lesson=self.lesson)
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get(reverse('feed-saved'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], self.lesson.id)
+        self.assertTrue(response.data['results'][0]['is_saved'])
+
+    def test_guest_cannot_list_saved_lessons(self):
+        response = self.client.get(reverse('feed-saved'))
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_teacher_profile_summary_returns_without_serializing_posts(self):
+        from apps.users.models import TeacherProfile
+
+        TeacherProfile.objects.create(
+            user=self.teacher,
+            employee_id='profile-api-teacher',
+            bio='Science teacher',
+        )
+        models.TeacherFollower.objects.create(
+            user=self.student,
+            teacher=self.teacher,
+        )
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get(
+            reverse('feed-teacher-profile', kwargs={'pk': self.teacher.id}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['username'], self.teacher.username)
+        self.assertEqual(response.data['follower_count'], 1)
+        self.assertEqual(response.data['total_lessons'], 1)
+        self.assertTrue(response.data['is_following'])
+        self.assertNotIn('email', response.data)
+        self.assertNotIn('phone', response.data)
+
+    def test_teacher_lessons_endpoint_returns_paginated_lessons(self):
+        response = self.client.get(
+            reverse('feed-teacher-lessons', kwargs={'pk': self.teacher.id}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], self.lesson.id)
 
     def test_student_cannot_create_lesson(self):
         self.client.force_authenticate(user=self.student)

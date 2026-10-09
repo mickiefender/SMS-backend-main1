@@ -90,73 +90,20 @@ class GuestService:
         device_id: str,
         strategy: str = 'guest_personalized',
     ):
-        """Return lessons matching the guest's academic level, class, and subjects.
+        """Return the full public lesson pool, ranked without hard preference filters.
 
-        Falls back to progressively wider audiences so guests never see an
-        empty feed when there are no published lessons for their exact
-        level/class/subject combination:
-          level+class+subject → level+class → level → subject → trending
+        The blended guest endpoint applies the shared interaction-based ranking.
+        This legacy queryset endpoint retains a popular-content ranking while
+        ensuring onboarding preferences never exclude public lessons.
         """
-        try:
-            learner = GuestLearner.objects.get(device_id=device_id)
-        except GuestLearner.DoesNotExist:
-            return RecommendationService.get_guest_recommendations(strategy='trending')
-
-        level_id = learner.level_id
-        class_id = learner.class_obj_id
-        subject_ids = learner.subject_ids or []
-
-        base = RecommendationService._base_public_queryset()
-
-        def _personalized(level=None, cls=None, subjects=None):
-            qs = base
-            if level:
-                qs = qs.filter(level_id=level)
-            if cls:
-                qs = qs.filter(class_obj_id=cls)
-            if subjects:
-                qs = qs.filter(subject_id__in=subjects)
-            return qs
-
-        # Progressive relaxation: pick the most specific filter that has content.
-        candidates = None
-        if level_id and class_id and subject_ids:
-            candidate = _personalized(level_id, class_id, subject_ids)
-            if candidate.exists():
-                candidates = candidate
-        if candidates is None and level_id and class_id:
-            candidate = _personalized(level_id, class_id, None)
-            if candidate.exists():
-                candidates = candidate
-        if candidates is None and level_id and subject_ids:
-            candidate = _personalized(level_id, None, subject_ids)
-            if candidate.exists():
-                candidates = candidate
-        if candidates is None and level_id:
-            candidate = _personalized(level_id, None, None)
-            if candidate.exists():
-                candidates = candidate
-        if candidates is None and subject_ids:
-            candidate = _personalized(None, None, subject_ids)
-            if candidate.exists():
-                candidates = candidate
-
-        if candidates is None:
-            # No published lessons match the guest's preferences — show
-            # trending public content instead of an empty feed.
-            return RecommendationService.get_guest_recommendations(strategy='trending')
-
         from django.db.models import F
-        from decimal import Decimal
 
-        qs = candidates.annotate(
+        return RecommendationService._base_public_queryset().annotate(
             rec_score=(
                 F('trending_score') * Decimal('0.5') +
                 RecommendationService._engagement_score() * Decimal('0.5')
             )
         ).order_by('-rec_score', '-published_at')
-
-        return qs
 
     # ─── Likes (DB + trigger-safe) ───────────────────────────────
 
@@ -165,11 +112,12 @@ class GuestService:
         """Toggle like on a lesson for a guest user."""
         from django.db import connection
 
-        # Check if the guest learner exists
-        try:
-            learner = GuestLearner.objects.get(device_id=device_id)
-        except GuestLearner.DoesNotExist:
-            return {'liked': False, 'like_count': 0}
+        # Skipped-onboarding guests may not have a profile row yet. Create a
+        # minimal one so guest likes still satisfy the database foreign key.
+        GuestLearner.objects.get_or_create(
+            device_id=device_id,
+            defaults={'name': 'Guest'},
+        )
 
         with connection.cursor() as cursor:
             # Check if already liked using the feed_guestlike table
@@ -200,6 +148,12 @@ class GuestService:
             like_count = lesson.like_count
         except FeedLesson.DoesNotExist:
             like_count = 0
+
+        InterestScoringService.record_interaction(
+            guest_device_id=device_id,
+            lesson_id=lesson_id,
+            interaction_type='like' if liked else 'unlike',
+        )
 
         return {'liked': liked, 'like_count': like_count}
 

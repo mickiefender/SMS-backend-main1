@@ -90,6 +90,7 @@ class FeedService:
         profile = TeacherProfile.objects.select_related('user').get(user_id=teacher_id)
         lessons = FeedService.get_teacher_feed(teacher_id, user)
         follower_count = models.TeacherFollower.objects.filter(teacher_id=teacher_id).count()
+        following_count = models.TeacherFollower.objects.filter(user_id=teacher_id).count()
         is_following = False
         if user and user.is_authenticated:
             is_following = models.TeacherFollower.objects.filter(user=user, teacher_id=teacher_id).exists()
@@ -97,6 +98,7 @@ class FeedService:
             'profile': profile,
             'lessons': lessons,
             'follower_count': follower_count,
+            'following_count': following_count,
             'is_following': is_following,
         }
 
