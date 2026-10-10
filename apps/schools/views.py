@@ -18,7 +18,7 @@ from core.cache import (
 from apps.schools.models import School, Plan, Subscription, Announcement
 from apps.schools.signals import _invalidate_school_lookup_cache
 from apps.schools.serializers import SchoolSerializer, PlanSerializer, SubscriptionSerializer, AnnouncementSerializer
-from apps.users.models import User
+from apps.users.models import User, StudentProfile, TeacherProfile
 
 
 
@@ -29,6 +29,10 @@ class PlanViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_permissions(self):
+        if self.request.user.role == 'platform_staff':
+            if self.action in ['list', 'retrieve']:
+                return [IsAuthenticated(), make_platform_permission_class('finance.view')()]
+            return [IsSuperAdmin()]
         if self.action in ['create', 'update', 'destroy']:
             return [IsSuperAdmin()]
         return [IsAuthenticated()]
@@ -40,10 +44,32 @@ class SchoolViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_permissions(self):
+        if self.request.user.role == 'platform_staff':
+            permission_by_action = {
+                'list': 'schools.view',
+                'retrieve': 'schools.view',
+                'create': 'schools.create',
+                'update': 'schools.edit',
+                'partial_update': 'schools.edit',
+                'destroy': 'schools.delete',
+                'suspend': 'schools.suspend',
+                'activate': 'schools.suspend',
+                'upload_logo': 'schools.edit',
+                'subscription_status': 'schools.view',
+                'super_admin_usage': ('schools.view', 'platform.analytics', 'finance.view'),
+                'super_admin_analytics': 'platform.analytics',
+            }
+            required = permission_by_action.get(self.action)
+            if required:
+                required_codes = required if isinstance(required, tuple) else (required,)
+                return [IsAuthenticated(), make_platform_permission_class(*required_codes)()]
+            return [IsSuperAdmin()]
         if self.action in ['create', 'destroy', 'suspend', 'activate']:
             return [IsSuperAdmin()]
         if self.action in ['update', 'partial_update']:
             return [CanManageSchoolProfile()]
+        if self.action in ['super_admin_usage', 'super_admin_analytics']:
+            return super().get_permissions()
         return [IsAuthenticated()]
 
     @cached_api_response('schools', CACHE_TTL['schools'], tags=('homepage',))
@@ -53,6 +79,11 @@ class SchoolViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if self.request.user.role == 'super_admin':
             return School.objects.select_related('plan', 'subscription__plan').all()
+        if self.request.user.role == 'platform_staff':
+            from core.permissions import user_has_platform_permission
+            if user_has_platform_permission(self.request.user, 'schools.view'):
+                return School.objects.select_related('plan', 'subscription__plan').all()
+            return School.objects.none()
         if hasattr(self.request.user, 'school') and self.request.user.school:
             return School.objects.select_related('plan', 'subscription__plan').filter(id=self.request.user.school.id)
         return School.objects.none()
@@ -176,7 +207,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         return Response({'message': 'Cache invalidated successfully'})
 
     @action(detail=False, methods=['get'], permission_classes=[
-        IsAuthenticated, make_platform_permission_class('platform.analytics'),
+        IsAuthenticated, make_platform_permission_class('platform.analytics', 'finance.view'),
     ])
     def super_admin_usage(self, request):
         """Aggregated usage across all schools.
@@ -195,17 +226,26 @@ class SchoolViewSet(viewsets.ModelViewSet):
         except Exception:
             pass
 
-        # All counts in one grouped query: students & teachers per school
-        user_stats = (
-            User.objects.filter(role__in=['student', 'teacher'])
-            .values('school_id', 'role')
+        counts = {}
+        student_stats = (
+            StudentProfile.objects.filter(user__school_id__isnull=False)
+            .values('user__school_id')
             .annotate(total=Count('id'))
         )
-        counts = {}
-        for row in user_stats:
-            school_id = row['school_id']
+        for row in student_stats:
+            school_id = row['user__school_id']
             bucket = counts.setdefault(school_id, {'students': 0, 'teachers': 0})
-            bucket[row['role']] = row['total']
+            bucket['students'] = row['total']
+
+        teacher_stats = (
+            TeacherProfile.objects.filter(user__school_id__isnull=False)
+            .values('user__school_id')
+            .annotate(total=Count('id'))
+        )
+        for row in teacher_stats:
+            school_id = row['user__school_id']
+            bucket = counts.setdefault(school_id, {'students': 0, 'teachers': 0})
+            bucket['teachers'] = row['total']
 
         # Revenue per school from both payment sources in one query each
         manual_rev = (
@@ -459,6 +499,10 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_permissions(self):
+        if self.request.user.role == 'platform_staff':
+            if self.action in ['list', 'retrieve']:
+                return [IsAuthenticated(), make_platform_permission_class('finance.view')()]
+            return [IsSuperAdmin()]
         if self.action in ['create', 'destroy']:
             return [IsSuperAdmin()]
         return [IsAuthenticated()]
@@ -466,6 +510,11 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if self.request.user.role == 'super_admin':
             return Subscription.objects.all()
+        if self.request.user.role == 'platform_staff':
+            from core.permissions import user_has_platform_permission
+            if user_has_platform_permission(self.request.user, 'finance.view'):
+                return Subscription.objects.all()
+            return Subscription.objects.none()
         return Subscription.objects.filter(school=self.request.user.school)
 
 

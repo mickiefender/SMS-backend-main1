@@ -47,9 +47,21 @@ class IsSuperAdmin(IsAuthenticated):
         if user.role != 'platform_staff':
             return False
 
-        required = PLATFORM_VIEW_PERMISSIONS.get(view.__class__.__name__)
+        view_name = view.__class__.__name__
+        action = getattr(view, 'action', None)
+
+        # Platform staff may see role definitions but cannot create roles,
+        # assign permissions, or manage other staff accounts.
+        if view_name == 'PlatformStaffView' and request.method != 'GET':
+            return False
+        if view_name == 'PlatformRoleViewSet' and action not in ('list', 'retrieve', 'assignments'):
+            return False
+
+        required = PLATFORM_ACTION_PERMISSIONS.get((view_name, action))
         if required is None:
-            return user.platform_roles.filter(role__is_system=False).exists()
+            required = PLATFORM_VIEW_PERMISSIONS.get(view_name)
+        if required is None:
+            return False
         from core.permissions import user_has_platform_permission
         required_codes = required if isinstance(required, tuple) else (required,)
         return user_has_platform_permission(user, *required_codes)
@@ -88,6 +100,7 @@ PLATFORM_VIEW_PERMISSIONS = {
     'ChatwootConversationMessagesView': 'platform.support',
     'ChatwootConversationStatusView': 'platform.support',
     'StorageQuotaViewSet': 'platform.storage',
+    'PlatformStorageUsageView': 'platform.storage',
     'MonitoringSnapshotViewSet': 'platform.monitoring',
     'SystemHealthView': 'platform.monitoring',
     'ImpersonationView': 'platform.staff',
@@ -95,6 +108,24 @@ PLATFORM_VIEW_PERMISSIONS = {
     'InvoiceViewSet': 'finance.view',
     'RefundViewSet': 'finance.view',
     'PlatformOverviewView': 'platform.analytics',
+}
+
+
+PLATFORM_ACTION_PERMISSIONS = {
+    ('CouponViewSet', 'create'): 'finance.coupons',
+    ('CouponViewSet', 'update'): 'finance.coupons',
+    ('CouponViewSet', 'partial_update'): 'finance.coupons',
+    ('CouponViewSet', 'destroy'): 'finance.coupons',
+    ('InvoiceViewSet', 'create'): 'finance.invoices',
+    ('InvoiceViewSet', 'update'): 'finance.invoices',
+    ('InvoiceViewSet', 'partial_update'): 'finance.invoices',
+    ('InvoiceViewSet', 'destroy'): 'finance.invoices',
+    ('InvoiceViewSet', 'mark_paid'): 'finance.invoices',
+    ('RefundViewSet', 'create'): 'finance.refund',
+    ('RefundViewSet', 'update'): 'finance.refund',
+    ('RefundViewSet', 'partial_update'): 'finance.refund',
+    ('RefundViewSet', 'destroy'): 'finance.refund',
+    ('RefundViewSet', 'process'): 'finance.refund',
 }
 
 
@@ -1066,6 +1097,32 @@ class MonitoringSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
 # Dashboard overview
 # ---------------------------------------------------------------------------
 
+class PlatformStorageUsageView(APIView):
+    """Return live aggregate usage from Supabase Storage objects."""
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    COALESCE(SUM(
+                        CASE
+                            WHEN COALESCE(metadata->>'size', '') ~ '^[0-9]+$'
+                            THEN (metadata->>'size')::BIGINT
+                            ELSE 0
+                        END
+                    ), 0),
+                    COUNT(*)
+                FROM storage.objects
+            """)
+            storage_used_bytes, storage_object_count = cursor.fetchone()
+
+        return Response({
+            'used_bytes': int(storage_used_bytes),
+            'object_count': storage_object_count,
+        })
+
+
 class PlatformOverviewView(APIView):
     """Aggregated stats for the super-admin dashboard."""
     permission_classes = [IsSuperAdmin]
@@ -1122,9 +1179,6 @@ class PlatformOverviewView(APIView):
             'subscriptions': {
                 'active': subs.filter(status='active').count(),
                 'cancelled': subs.filter(status='cancelled').count(),
-            },
-            'storage': {
-                'used_mb': StorageQuota.objects.aggregate(total=Sum('used_mb'))['total'] or 0,
             },
             'support': {
                 'open_tickets': SupportTicket.objects.filter(status='open').count(),

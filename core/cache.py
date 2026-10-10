@@ -261,7 +261,7 @@ CACHE_KEYS = {
     'teacher_performance': 'academics:teacher_performance:{school_id}:{user_id}',
     'overall_attendance': 'attendance:overall:{school_id}',
     'student_classes': 'academics:student_classes:{school_id}',
-    'super_admin_usage': 'super_admin:usage',
+    'super_admin_usage': 'super_admin:usage:v2',
     'super_admin_analytics': 'super_admin:analytics',
     'billing_fees': 'billing:fees:{school_id}',
     'billing_payments_school': 'billing:payments:school:{school_id}',

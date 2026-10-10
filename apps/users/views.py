@@ -8,8 +8,14 @@ from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth import authenticate
 from django.db import connection, OperationalError, IntegrityError, transaction
 from django.db.models import Count, Q
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
-from core.permissions import IsSchoolAdminOrHigher, IsSuperAdmin, CanManageAdminStaff
+from core.permissions import (
+    IsSchoolAdminOrHigher,
+    IsSuperAdmin,
+    CanManageAdminStaff,
+    make_platform_permission_class,
+)
 from core.cache import CACHE_TTL, cached_api_response
 from apps.users.models import User, TeacherProfile, StudentProfile, RolePermission, ParentStudentRelationship
 from apps.academics.models import (
@@ -176,6 +182,9 @@ class AuthViewSet(viewsets.ViewSet):
                         pass
 
                 if user:
+                    user.last_login = timezone.now()
+                    user.save(update_fields=['last_login'])
+
                     refresh = RefreshToken.for_user(user)
                     user_data = UserSerializer(user).data
 
@@ -210,6 +219,20 @@ class UserViewSet(viewsets.ModelViewSet):
     pagination_class = UserPagination
 
     def get_permissions(self):
+        if self.request.user.role == 'platform_staff':
+            permission_by_action = {
+                'list': 'users.view',
+                'retrieve': 'users.view',
+                'update': 'users.edit',
+                'partial_update': 'users.edit',
+                'ban_user': 'users.ban',
+                'suspend_user': 'users.ban',
+                'reset_password': 'users.reset_password',
+            }
+            required = permission_by_action.get(self.action)
+            if required:
+                return [IsAuthenticated(), make_platform_permission_class(required)()]
+            return [IsSuperAdmin()]
         if self.action in ['ban_user', 'suspend_user', 'reset_password', 'assign_global_role', 'global_stats']:
             return [IsAuthenticated(), IsSuperAdmin()]
         return [IsAuthenticated()]
@@ -217,6 +240,14 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         ensure_connection()
         queryset = User.objects.all()
+
+        if self.request.user.role == 'platform_staff':
+            from core.permissions import user_has_platform_permission
+            if any(user_has_platform_permission(self.request.user, code) for code in (
+                'users.view', 'users.edit', 'users.ban', 'users.reset_password',
+            )):
+                return queryset
+            return queryset.none()
 
         if self.request.user.role != 'super_admin':
             queryset = queryset.filter(school=self.request.user.school)

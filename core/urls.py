@@ -19,6 +19,7 @@ urlpatterns = [
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/users/', include('apps.users.urls')),
     path('api/ai-chat/', include('apps.ai_chat.urls')),
+    path('api/library/', include('apps.library.urls')),
     path('api/schools/', include('apps.schools.urls')),
     path('api/academics/', include('apps.academics.urls')),
     path('api/attendance/', include('apps.attendance.urls')),

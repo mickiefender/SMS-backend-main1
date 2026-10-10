@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     # Super Admin platform (roles, audit, tickets, flags, settings, ...)
     'apps.platform',
     'apps.ai_chat',
+    'apps.library',
 ]
 
 MIDDLEWARE = [
